@@ -1,6 +1,6 @@
 from CSPDetectionDistribution import CSPDetectionDistribution
 import torch
-
+import time
 def calculatePositionProb(samples,logProbs,shape):
     probs = torch.zeros(shape)
 
@@ -28,7 +28,7 @@ def calculatePositionProb(samples,logProbs,shape):
     #
     return probs, rowMissing, colMissing
 #
-def calculateDistanceMatrix(dim: int, noCSP: int, minNoMatchDistance: float, maxNonMatchDistance: float):
+def calculateDistanceMatrix(dim: int, noCSP: int):
     matchingDistances = torch.zeros(dim)
 
     scaling = 10
@@ -51,21 +51,22 @@ def calculateDistanceMatrix(dim: int, noCSP: int, minNoMatchDistance: float, max
 if __name__ == '__main__':
 
     torch.manual_seed(42)
-    nsamples = 100
-    distances = calculateDistanceMatrix(5, 3, 3, 10)
+    nsamples = 1000
+    distances = calculateDistanceMatrix(500, 450)
     print(distances)
 
-    CSPparameters = torch.ones(distances.shape[0],distances.shape[1],2)*0.99
-    CSPparameters[:,:,1] = 1.0 - CSPparameters[:,:,0]
-    gumbel_parameters = [10, 20]
+    assignment_parameters= torch.ones(distances.shape[0],distances.shape[1],2)
+    CSP_parameters= torch.tensor([10, 20], dtype=torch.float)
+    non_matching_parameters = torch.tensor([1.87, 390],dtype=torch.float32)
 
-    CSPDist = CSPDetectionDistribution(distances, CSPparameters, gumbel_parameters)
+    CSPDist = CSPDetectionDistribution(distances, assignment_parameters, CSP_parameters, non_matching_parameters)
 
-    samples=[]
-    logProbs = torch.zeros(nsamples,dtype=torch.float32)
-    for i in range(nsamples):
-        samples.append(CSPDist.sample())
-        l = CSPDist.log_prob(samples[i])
-        l.backward()
-    #
-    print(calculatePositionProb(samples,logProbs))
+
+for sampleSize in [ 10, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000]:
+    start = time.time()
+    samples = CSPDist.sample((sampleSize,))
+    end = time.time()
+
+    elapsed_time = end - start
+    print(f"Sample Size: {sampleSize} Elapsed time: {elapsed_time:.6f} seconds")
+

@@ -31,9 +31,8 @@ def EM_minimization_function(samples, dist: CSPDetectionDistribution, csp_probab
         log_probs.index_add_(0,torch.tensor([i],dtype=torch.int32),dist.log_prob(samples[i]).squeeze(0))
         assert(log_probs[i].requires_grad)
     #
-    weights = (log_probs - log_probs.logsumexp(dim=0)).exp()
 
-    logLikelihoodTerm = (weights * log_probs).sum()
+    logLikelihoodTerm = log_probs.sum()
 
     log_probability_params = dist.csp_probability_parameters() - dist.csp_probability_parameters().logsumexp(dim=2,keepdim=True)
     csp_assignment_individual_regularization = log_probability_params * (csp_probability_prior_params.unsqueeze(0).unsqueeze(0)-1.0)
