@@ -61,11 +61,9 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
         completed_sample_mask = total_available == 0
 
-        dist = torch.distributions.Categorical(probs=availableParticles[~completed_sample_mask,:])
-
         row_or_col_indexes = torch.zeros(sample.shape[0:-1],dtype=torch.int32)
 
-        sampled_particles = dist.sample().type(torch.int32)
+        sampled_particles = torch.multinomial(availableParticles[~completed_sample_mask,:].type(torch.float32),1).type(torch.int32).squeeze(-1)
 
         row_or_col_indexes[~completed_sample_mask] = sampled_particles
         row_or_col_indexes[completed_sample_mask] = -1
@@ -79,15 +77,16 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
         #Handle Row Based decisions
 
-        row_indexes = row_or_col_indexes[row_indexes_mask]
+
         if row_indexes_mask.any():
+            row_indexes = row_or_col_indexes[row_indexes_mask]
             row_matching_likelihoods = self._baseMatchLikelihood[row_indexes,:]*availableColumns[row_indexes_mask,:]
             noMatchDecisionLikelihoodMatrix = (noMatchMatrix[row_indexes,:]*availableColumns[row_indexes_mask,:])
             row_matching_nonMatching_likelihoods = (row_matching_likelihoods +
                                                 noMatchDecisionLikelihoodMatrix.sum(-1,keepdim=True) -
                                                 noMatchDecisionLikelihoodMatrix)
             decision_likelihoods = torch.cat((row_matching_nonMatching_likelihoods,noMatchDecisionLikelihoodMatrix.sum(-1,keepdim=True)),dim=1)
-            matched_column_indexes = torch.distributions.Categorical(logits=decision_likelihoods).sample().type(torch.int32)
+            matched_column_indexes = torch.multinomial((decision_likelihoods-decision_likelihoods.logsumexp(-1,keepdim=True)).exp(),1).type(torch.int32).squeeze(-1)
 
             proposal_probability = decision_likelihoods[torch.arange(decision_likelihoods.shape[0]),matched_column_indexes] - decision_likelihoods.logsumexp(dim=1) + torch.log(1.0/total_available[row_indexes_mask])
             sample_weights[row_indexes_mask] = (sample_weights[row_indexes_mask] + decision_likelihoods[torch.arange(decision_likelihoods.shape[0]),matched_column_indexes] +
@@ -103,9 +102,9 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
             availableColumns[sample_indicies[row_indexes_mask][~nomatched_column_mask],matched_column_indexes[~nomatched_column_mask]] = False
         #
             #Handle Column Based Decision
-        column_indexes = row_or_col_indexes[col_indexes_mask]
-        if col_indexes_mask.any():
 
+        if col_indexes_mask.any():
+            column_indexes = row_or_col_indexes[col_indexes_mask]
             column_matching_likelihoods = self._baseMatchLikelihood[:,column_indexes].transpose(0,1)*availableRows[col_indexes_mask,:]
             noMatchDecisionLikelihoodMatrix = (noMatchMatrix[:,column_indexes].transpose(0,1)*availableRows[col_indexes_mask,:])
 
@@ -113,7 +112,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                                                    noMatchDecisionLikelihoodMatrix.sum(-1,keepdim=True) -
                                                    noMatchDecisionLikelihoodMatrix)
             decision_likelihoods = torch.cat((column_matching_nonMatching_likelihoods, noMatchDecisionLikelihoodMatrix.sum(-1,keepdim=True)), dim=1)
-            matched_row_indexes = torch.distributions.Categorical(logits=decision_likelihoods).sample().type(torch.int32)
+            matched_row_indexes = torch.multinomial((decision_likelihoods-decision_likelihoods.logsumexp(-1,keepdim=True)).exp(),1).type(torch.int32).squeeze(-1)
 
             proposal_probability = decision_likelihoods[torch.arange(decision_likelihoods.shape[0]),matched_row_indexes] - decision_likelihoods.logsumexp(dim=1) + torch.log(1.0/total_available[col_indexes_mask])
 

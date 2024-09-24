@@ -1,6 +1,7 @@
 from CSPDetectionDistribution import CSPDetectionDistribution
 import torch
 import time
+import cProfile
 def calculatePositionProb(samples,logProbs,shape):
     probs = torch.zeros(shape)
 
@@ -62,11 +63,4 @@ if __name__ == '__main__':
     CSPDist = CSPDetectionDistribution(distances, assignment_parameters, CSP_parameters, non_matching_parameters)
 
 
-for sampleSize in [ 10, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000]:
-    start = time.time()
-    samples = CSPDist.sample((sampleSize,))
-    end = time.time()
-
-    elapsed_time = end - start
-    print(f"Sample Size: {sampleSize} Elapsed time: {elapsed_time:.6f} seconds")
-
+    cProfile.run('CSPDist.sample((100,))',filename='output.prof')
