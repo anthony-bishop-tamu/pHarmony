@@ -53,7 +53,7 @@ if __name__ == '__main__':
 
     torch.manual_seed(42)
     nsamples = 100
-    distances = calculateDistanceMatrix(10, 10)
+    distances = calculateDistanceMatrix(200, 180)
     print(distances)
 
     assignment_parameters= torch.ones(distances.shape[0],distances.shape[1],2)
@@ -62,8 +62,7 @@ if __name__ == '__main__':
 
     CSPDist = CSPDetectionDistribution(distances, assignment_parameters, CSP_parameters, non_matching_parameters)
 
-    CSPDist.sample((10,))
-
+    cProfile.run('CSPDist.sample((nsamples,))','output.prof')
 '''for i in [100, 200, 500, 1000, 2000, 5000, 10000]:
     sample_start = time.time()
     samples = CSPDist.sample((i,))
