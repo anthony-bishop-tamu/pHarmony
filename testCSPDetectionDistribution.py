@@ -2,32 +2,16 @@ from CSPDetectionDistribution import CSPDetectionDistribution
 import torch
 import time
 import cProfile
-def calculatePositionProb(samples,logProbs,shape):
-    probs = torch.zeros(shape)
+import numpy as np
+def calculatePositionProb(sample,shape):
+    positionProbs = torch.zeros(shape,dtype=torch.float)
+    matched_mask = sample != -1
+    match_rows = torch.nonzero(matched_mask)[...,1]
+    match_columns = sample[matched_mask]
 
-    probVector = (logProbs - logProbs.logsumexp(dim=0)).exp()
-    rowMissing = torch.zeros(shape[0])
-    colMissing = torch.zeros(shape[1])
-    idx = 0
-    for sample in samples:
-        for i in range(sample.shape[0]):
-            order = sample[i,0]
-            match = sample[i,1]
-            if order < shape[0]:
-                if match == - 1:
-                    rowMissing[order] = +1*probVector[idx]
-                else:
-                    probs[order, match - shape[0]] += 1*probVector[idx]
-
-            else:
-                if match == - 1:
-                    colMissing[order-shape[0]] += 1 * probVector[idx]
-                else:
-                    probs[match, order - shape[0]] += 1 * probVector[idx]
-        #
-        idx+=1
-    #
-    return probs, rowMissing, colMissing
+    positionProbs[match_rows,match_columns] += 1
+    positionProbs /= np.prod(sample.shape[0:-1])
+    return positionProbs
 #
 def calculateDistanceMatrix(dim: int, noCSP: int):
     matchingDistances = torch.zeros(dim)
@@ -53,7 +37,7 @@ if __name__ == '__main__':
 
     torch.manual_seed(42)
     nsamples = 100
-    distances = calculateDistanceMatrix(200, 180)
+    distances = calculateDistanceMatrix(50, 40)
     print(distances)
 
     assignment_parameters= torch.ones(distances.shape[0],distances.shape[1],2)
@@ -61,8 +45,10 @@ if __name__ == '__main__':
     non_matching_parameters = torch.tensor([1.87, 390],dtype=torch.float32)
 
     CSPDist = CSPDetectionDistribution(distances, assignment_parameters, CSP_parameters, non_matching_parameters)
-
-    cProfile.run('CSPDist.sample((nsamples,))','output.prof')
+    samples = CSPDist.sample((nsamples,))
+    probs = calculatePositionProb(samples,(50,50))
+    print(probs)
+    #cProfile.run('CSPDist.sample((nsamples,))','output.prof')
 '''for i in [100, 200, 500, 1000, 2000, 5000, 10000]:
     sample_start = time.time()
     samples = CSPDist.sample((i,))
