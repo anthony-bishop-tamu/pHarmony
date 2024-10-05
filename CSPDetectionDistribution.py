@@ -13,7 +13,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         self._distances = distances
         self._csp_probability_parameters = csp_prob_parameters # logits
         self._csp_distribution_parameters = csp_distribution_parameters
-        self._csp_distribution = dist.Normal(self._csp_distribution_parameters[0],self._csp_distribution_parameters[1])
+        self._csp_distribution = dist.Weibull(concentration=self._csp_distribution_parameters[0],scale=self._csp_distribution_parameters[1])
         self._non_matching_distribution_parameters = non_matching_distribution_parameters
         self._non_matching_distribution = dist.Weibull(concentration=self._non_matching_distribution_parameters[0],
                                                        scale=self._non_matching_distribution_parameters[1]) #location scale
@@ -23,6 +23,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         self.max_float32 = torch.finfo(torch.float32).max
         self.min_float32 = torch.finfo(torch.float32).min
         self._event_shape = torch.Size([self._distances.shape[0],3])
+
 
         self._loglikelihoodMatrix = torch.stack((self._chi2_distribution.log_prob(self._distances).clamp(min=self.min_float32),
                                                 self._csp_distribution.log_prob(self._distances).clamp(min=self.min_float32),
@@ -39,9 +40,10 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         self._match_non_matching_loglikelihoods = self._loglikelihoodMatrix[:, :, 2]
         self._matching_likelihood = (self._loglikelihoodMatrix[:, :,0:2]+self._csp_probability_parameters).logsumexp(dim=2)
 
+
         self._base_row_decision_likelihoods= torch.zeros((self._distances.shape[0],self._distances.shape[1]+1),dtype=torch.float32)
-        self._base_row_decision_likelihoods[:,:] = self._match_non_matching_loglikelihoods.sum(dim=-1).unsqueeze(1)
-        self._base_row_decision_likelihoods[:,:-1] += self._matching_likelihood - self._match_non_matching_loglikelihoods
+        self._base_row_decision_likelihoods[:,:] = self._match_non_matching_loglikelihoods.detach().sum(dim=-1).unsqueeze(1)
+        self._base_row_decision_likelihoods[:,:-1] += self._matching_likelihood.detach() - self._match_non_matching_loglikelihoods.detach()
 
 
     def _makeDecision(self, logits: torch.tensor) -> torch.tensor:
@@ -97,7 +99,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
         row_decision_matrix[sample_indicies,sampled_rows,:] = -1*torch.inf
         row_decision_matrix[~no_matched_columns,:,matched_columns[~no_matched_columns]] = -1*torch.inf
-        row_decision_matrix[~no_matched_columns,:,:] -= self._match_non_matching_loglikelihoods[:,matched_columns[~no_matched_columns]].transpose(0,1).unsqueeze(-1)
+        row_decision_matrix[~no_matched_columns,:,:] -= self._match_non_matching_loglikelihoods[:,matched_columns[~no_matched_columns]].transpose(0,1).unsqueeze(-1).detach()
 
     #
     def _resample(self, sample: torch.Tensor, sample_weights: torch.Tensor,
@@ -165,9 +167,12 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         matched_mask = sample != -1
         match_rows = torch.nonzero(matched_mask)
         match_columns = sample[matched_mask]
-        return (non_matching_totalloglikelihood -
-                self._loglikelihoodMatrix[match_rows[...,1],match_columns,2].sum()*normalized_weights  +
+        log_prob = (non_matching_totalloglikelihood -
+                self._loglikelihoodMatrix[match_rows[...,1],match_columns,2].sum()*normalized_weights +
                 self._matching_likelihood[match_rows[...,1],match_columns].sum()*normalized_weights)
+
+
+        return log_prob
 
     def csp_distribution_parameters(self):
         return self._csp_distribution_parameters
