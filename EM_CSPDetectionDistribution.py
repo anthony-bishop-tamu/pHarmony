@@ -16,14 +16,14 @@ def EM_minimization_function(samples, dist: CSPDetectionDistribution, csp_probab
 
     logLikelihoodTerm = dist.log_prob(samples[0],samples[1]).sum()
 
-    log_probability_params = dist.csp_probability_parameters() - dist.csp_probability_parameters().logsumexp(dim=2,keepdim=True)
-    csp_assignment_individual_regularization = log_probability_params * (csp_probability_prior_params.unsqueeze(0).unsqueeze(0)-1.0)
-    csp_assignment_regularization = csp_assignment_individual_regularization.sum()
+    #log_probability_params = dist.csp_probability_parameters() - dist.csp_probability_parameters().logsumexp(dim=2,keepdim=True)
+    #csp_assignment_individual_regularization = log_probability_params * (csp_probability_prior_params.unsqueeze(0).unsqueeze(0)-1.0)
+    #csp_assignment_regularization = csp_assignment_individual_regularization.sum()
 
-    csp_distribution_individual_regularization = (csp_distribution_parameters - csp_distribution_prior_params[:,0])**2/(2*csp_distribution_prior_params[:,1]**2)
-    csp_distribution_regularization = -1*csp_distribution_individual_regularization.sum()
+    #csp_distribution_individual_regularization = (csp_distribution_parameters - csp_distribution_prior_params[:,0])**2/(2*csp_distribution_prior_params[:,1]**2)
+    #csp_distribution_regularization = -1*csp_distribution_individual_regularization.sum()
     value = logLikelihoodTerm #csp_assignment_regularization + csp_distribution_regularization
-    print("Loss: ", logLikelihoodTerm, csp_assignment_regularization, csp_distribution_regularization)
+    print("Loss: ", logLikelihoodTerm)#, csp_assignment_regularization, csp_distribution_regularization)
     #print(csp_distribution_params)
     #print(dist.csp_assignment_parameters())
     return -1 * value
@@ -46,7 +46,7 @@ def maximization(samples: tuple,
                  no_match_distribution_parameters: torch.tensor):
 
 
-    optimizer = torch.optim.LBFGS([csp_assignment_params,csp_distribution_params],lr=1e-3,max_iter=100)
+    optimizer = torch.optim.LBFGS([csp_assignment_params,csp_distribution_params],lr=8e-3,max_iter=100)
 
     optimizer.step(lambda : optimizer_closure(optimizer, samples, distances, csp_assignment_params,csp_distribution_params,
                                               csp_assignment_prior_params, csp_distribution_prior_params,no_match_distribution_parameters))

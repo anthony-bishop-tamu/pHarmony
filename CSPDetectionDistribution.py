@@ -38,7 +38,8 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
     def _calculateDecisionLogLikelihood(self):
         #parameter corrected loglikelihoods
         self._match_non_matching_loglikelihoods = self._loglikelihoodMatrix[:, :, 2]
-        self._matching_likelihood = (self._loglikelihoodMatrix[:, :,0:2]+self._csp_probability_parameters).logsumexp(dim=2)
+        normalized_parameters = self._csp_probability_parameters - self._csp_probability_parameters.logsumexp(dim=2,keepdim=True)
+        self._matching_likelihood = (self._loglikelihoodMatrix[:, :,0:2]+normalized_parameters).logsumexp(dim=2)
 
 
         self._base_row_decision_likelihoods= torch.zeros((self._distances.shape[0],self._distances.shape[1]+1),dtype=torch.float32)
@@ -179,6 +180,16 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
     def csp_probability_parameters(self):
         return self._csp_probability_parameters
+
+    def csp_distribution(self):
+        return self._csp_distribution
+
+    def chi2_distribution(self):
+        return self._chi2_distribution
+
+    @property
+    def distances(self) -> torch.Tensor:
+        return self._distances
 
 
 
