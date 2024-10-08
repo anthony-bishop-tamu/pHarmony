@@ -1,9 +1,13 @@
 import torch
 import pyro.distributions as dist
 import torch.nn.functional as F
+from Frechet import Frechet
 import numpy as np
 class CSPDetectionDistribution(torch.distributions.Distribution):
-    def __init__(self, distances: torch.tensor, csp_prob_parameters: torch.tensor, csp_distribution_parameters: torch.tensor, non_matching_distribution_parameters: torch.tensor):
+    def __init__(self, distances: torch.tensor,
+                 csp_prob_parameters: torch.tensor,
+                 csp_distribution_parameters: torch.tensor,
+                 non_matching_distribution_parameters: torch.tensor):
         super().__init__()
         assert(distances.shape[0] >= distances.shape[1])
         assert(distances.shape + (2,) == csp_prob_parameters.shape)
@@ -13,11 +17,12 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         self._distances = distances
         self._csp_probability_parameters = csp_prob_parameters # logits
         self._csp_distribution_parameters = csp_distribution_parameters
-        self._csp_distribution = dist.Weibull(concentration=self._csp_distribution_parameters[0],scale=self._csp_distribution_parameters[1])
+        self._csp_distribution = Frechet(alpha=self._csp_distribution_parameters[0],
+                                         scale=self._csp_distribution_parameters[1])
         self._non_matching_distribution_parameters = non_matching_distribution_parameters
         self._non_matching_distribution = dist.Weibull(concentration=self._non_matching_distribution_parameters[0],
                                                        scale=self._non_matching_distribution_parameters[1]) #location scale
-        self._chi2_distribution = dist.torch.Chi2(1) #chi2 distribution for
+        self._no_csp_distribution = torch.distributions.HalfNormal(1.0) #chi2 distribution for
 
         self.eps_float32 = torch.finfo(torch.float32).eps
         self.max_float32 = torch.finfo(torch.float32).max
@@ -25,7 +30,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         self._event_shape = torch.Size([self._distances.shape[0],3])
 
 
-        self._loglikelihoodMatrix = torch.stack((self._chi2_distribution.log_prob(self._distances).clamp(min=self.min_float32),
+        self._loglikelihoodMatrix = torch.stack((self._no_csp_distribution.log_prob(self._distances).clamp(min=self.min_float32),
                                                 self._csp_distribution.log_prob(self._distances).clamp(min=self.min_float32),
                                                 self._non_matching_distribution.log_prob(self._distances).clamp(min=self.min_float32)),dim=2)
 
@@ -45,6 +50,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         self._base_row_decision_likelihoods= torch.zeros((self._distances.shape[0],self._distances.shape[1]+1),dtype=torch.float32)
         self._base_row_decision_likelihoods[:,:] = self._match_non_matching_loglikelihoods.detach().sum(dim=-1).unsqueeze(1)
         self._base_row_decision_likelihoods[:,:-1] += self._matching_likelihood.detach() - self._match_non_matching_loglikelihoods.detach()
+        self._base_row_decision_likelihoods[:,-1] += 0 #regularization to prevent missed matchest
 
 
     def _makeDecision(self, logits: torch.tensor) -> torch.tensor:
@@ -184,8 +190,8 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
     def csp_distribution(self):
         return self._csp_distribution
 
-    def chi2_distribution(self):
-        return self._chi2_distribution
+    def no_csp_distribution(self):
+        return self._no_csp_distribution
 
     @property
     def distances(self) -> torch.Tensor:

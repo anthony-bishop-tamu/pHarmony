@@ -33,21 +33,26 @@ def getPeakPositionsFromFile(filename, cs_cols, uncertaintycols=None, fixedError
 #
 def getInitialCSPDistributionParameters(distances: torch.tensor):
     assert distances.dim() == 2
-    cutoff = 5.0
+    cutoff = 10
     closestMatches = distances.min(dim=-1)[0]
     closestMatches = closestMatches[closestMatches > cutoff]
 
     assigmentParameters = torch.zeros(distances.shape+(2,),dtype=torch.float32)
     #assignmentParameters are logits
-    assigmentParameters[...,1] = (distances > 5)*3
-    assigmentParameters[...,1] = ((3 < distances) & (distances < 5))*1
-    assigmentParameters[...,1] = (distances < 3)* -2
+    assigmentParameters[...,1] += (distances >= 10)*8
+    assigmentParameters[...,1] += ((1 < distances) & (distances < 10))*1
+    assigmentParameters[...,1] += (distances <= 1)* -8
 
-    concentration,loc,scale = stats.weibull_min.fit(closestMatches.detach().numpy(),floc=0)
     #scale is the inverse of rate (i.e. rate = 1.0/scale)
     #loc is ignored as it is fixed at zero
+    median = closestMatches.median(dim=-1)[0]
+    max = closestMatches.max(dim=-1)[0]
+    log_med_max = torch.log(3/max)
+    q = torch.log(torch.tensor([0.99]))/torch.log(torch.tensor([0.1]))
+    alpha = torch.log(q)/log_med_max
+    scale = median*(-1*torch.log(torch.tensor([0.1])))**torch.tensor([1.0/alpha])
 
-    return torch.tensor([concentration,scale],dtype=torch.float32), assigmentParameters
+    return assigmentParameters, torch.tensor([alpha,scale],dtype=torch.float32)
 #
 
 def verifyTensorConvergence(torchPreviousParameter: torch.tensor,
@@ -79,20 +84,26 @@ def validateSufficentSampling(samples: tuple, shape: tuple) -> bool:
                             torch.tensor([0.05],dtype=torch.float32))
     return converged
 #
+def calculateCSPDistParameters(quantile, cutoff, median):
+
+    numerator = torch.log(-1*torch.log(1-quantile)) - torch.log(torch.log(torch.tensor([2.0])))
+    denominator = torch.log(cutoff) - torch.log(median)
+
+    k = numerator / denominator
+    lam = median/torch.pow(torch.log(torch.tensor([2.0])),1.0/k)
+    return torch.tensor([k,lam],dtype=torch.float32)
+#
 def EM_minimization_function(samples, dist: CSPDetectionDistribution):
 
     logLikelihoodTerm = dist.log_prob(samples[0],samples[1]).sum()
+   # positionProb = calculatePositionProb(samples[0],samples[1], dist._distances.shape)
     value = logLikelihoodTerm
-    csp_1_p = dist.csp_distribution().icdf(0.02)
-    k = dist.csp_distribution_parameters()[0]
-    df = dist.chi2_distribution().df
-    position = stats.chi2(df).ppf(0.999)
+   # probParams = dist.csp_probability_parameters()
+    #probs = (probParams - probParams.logsumexp(dim=-1,keepdim=True)).exp()[:,:,1]*positionProb
+    csp_assignment_regularization = 0
 
-    csp_dist_regularization = -1*torch.pow(torch.relu(position - csp_1_p),6) + -1*torch.pow(torch.relu(5.0-k),5)
-    #csp_dist_regularization=0
-
-    print("Loss: ", logLikelihoodTerm, csp_dist_regularization)
-    return -1 *(value + csp_dist_regularization)
+    print("Loss: ", logLikelihoodTerm, csp_assignment_regularization)
+    return -1 *(value + csp_assignment_regularization)
 def maximization(samples: tuple,
                  distances: torch.tensor,
                  csp_assignment_params: torch.tensor,
@@ -100,8 +111,7 @@ def maximization(samples: tuple,
                  no_match_distribution_parameters: torch.tensor):
 
 
-    optimizer = torch.optim.Adam([csp_assignment_params,csp_distribution_params], lr=1E-3)
-
+    optimizer = torch.optim.Adam([csp_assignment_params, csp_distribution_params], lr=1E-3)
     maxIterators = 10000
     prevLoss = torch.finfo(torch.float32).max
     for i in range(maxIterators):
@@ -110,7 +120,6 @@ def maximization(samples: tuple,
                                         no_match_distribution_parameters)
         loss = EM_minimization_function(samples, dist)
         loss.backward()
-        csp_distribution_parameters.grad[torch.isnan(csp_distribution_params.grad)]=0
         optimizer.step()
         if abs(prevLoss - loss.item()) < 1e-6:
             break
@@ -169,33 +178,31 @@ if __name__ == "__main__":
         distances_squared_normalized = distances_squared_normalized.transpose(0,1)
         transposed = True
     #
+    distances_normalized = torch.sqrt(distances_squared_normalized)
 
-    initial_nonMatching_distribution_parameters = getInitialWeibullParameters(distances_squared_normalized)
-    initial_csp_distribution_parameters, initial_assignment_parameters = (
-        getInitialCSPDistributionParameters(distances_squared_normalized))
+    initial_nonMatching_distribution_parameters = getInitialWeibullParameters(distances_normalized)
+    initial_assignment_parameters,initial_csp_distribution_parameters = (
+        getInitialCSPDistributionParameters(distances_normalized))
 
-    initial_csp_distribution_parameters[0].clamp_(min=1.01)
-    #initial_csp_distribution_parameters = torch.tensor([5.0,20],dtype=torch.float32)
-    csp_distribution_parameters = torch.tensor(initial_csp_distribution_parameters,requires_grad=True)
     assignment_parameters = torch.tensor(initial_assignment_parameters,requires_grad=True)
     nonMatching_distribution_parameters = torch.tensor(initial_nonMatching_distribution_parameters,requires_grad=True)
-
+    csp_distribution_parameters = torch.tensor(initial_csp_distribution_parameters,requires_grad=True)
 
 
 
 
 
     # get appropriate sample size
-    sampleSize = distances_squared_normalized.shape[0]
+    sampleSize = distances_normalized.shape[0]
     maxTries = 8
     for i in range(maxTries):
         print(f"Trying Sample Size: {sampleSize}")
-        dist = CSPDetectionDistribution(distances_squared_normalized,
+        dist = CSPDetectionDistribution(distances_normalized,
                                         assignment_parameters,
-                                        csp_distribution_parameters,
+                                        initial_csp_distribution_parameters,
                                         nonMatching_distribution_parameters)
         samples = dist.sample((sampleSize,))
-        converged = validateSufficentSampling(samples, distances_squared_normalized.shape)
+        converged = validateSufficentSampling(samples, distances_normalized.shape)
         if not converged:
             sampleSize *= 2
             if i == maxTries-1:
@@ -214,7 +221,7 @@ if __name__ == "__main__":
         previous_csp_distribution_parameters = csp_distribution_parameters.detach().clone()
         previous_nonMatching_distribution_parameters = nonMatching_distribution_parameters.detach().clone()
 
-        samples = runEMStep(distances_squared_normalized,
+        samples = runEMStep(distances_normalized,
                   assignment_parameters,
                   csp_distribution_parameters,
                   nonMatching_distribution_parameters,sampleSize)
@@ -222,8 +229,8 @@ if __name__ == "__main__":
         assignment_converged, assign_mean, assign_max = (
             verifyTensorConvergence((previous_assignment_parameters-previous_assignment_parameters.logsumexp(dim=2,keepdim=True)).exp(),
                                     (assignment_parameters-assignment_parameters.logsumexp(dim=2,keepdim=True)).exp(),
-                                                      0.02,
-                                                      0.03))
+                                                      0.01,
+                                                      0.01))
         csp_distribution_converged,csp_mean,csp_max = verifyTensorConvergence(previous_csp_distribution_parameters,
                                                              csp_distribution_parameters,
                                                              0.052,
@@ -241,8 +248,8 @@ if __name__ == "__main__":
             #
         #
     #
-    positionProbs = calculatePositionProb(samples[0],samples[1],distances_squared_normalized.shape)
-    matches = distances_squared_normalized[positionProbs>0.90].numpy()
+    positionProbs = calculatePositionProb(samples[0],samples[1],distances_normalized.shape)
+    matches = distances_normalized[positionProbs>0.90].numpy()
     assignment_parameters = (assignment_parameters - assignment_parameters.logsumexp(dim=2,keepdim=True)).exp().detach()
     csp_distribution_parameters = csp_distribution_parameters.detach().numpy()
     weights = (assignment_parameters*positionProbs.unsqueeze(-1))
@@ -252,16 +259,15 @@ if __name__ == "__main__":
     csp_weight = weights[:,1].sum().item()
     binwidth = 1
     match_bins = np.arange(0,np.max(matches),1)
-    chi2_pdf = stats.chi2(2).pdf(match_bins)
-    csp_pdf = (stats.weibull_min(csp_distribution_parameters[0],
-                                   scale=csp_distribution_parameters[1]).pdf(match_bins)*csp_weight)
+    chi2_pdf = dist.no_csp_distribution().log_prob(torch.from_numpy(match_bins)).exp().numpy()
+    csp_pdf = dist.csp_distribution().log_prob(torch.from_numpy(match_bins)).exp().numpy()*csp_weight
     plt.hist(matches,bins=match_bins,label='Matches',density=True)
     plt.plot(match_bins,chi2_pdf*chi2_weight,label='noCSP Distribution',linewidth=2)
     plt.plot(match_bins,csp_pdf,label='CSP Distribution',linewidth=2)
     plt.plot(match_bins,chi2_pdf*chi2_weight+csp_pdf,'r',label='matching_pdf')
-    plt.plot(match_bins,chi2_pdf,label="full chi2",linewidth=2)
-    plt.xlim([0,100])
-    plt.yscale('log')
+   # plt.plot(match_bins,chi2_pdf,label="full chi2",linewidth=2)
+    #plt.xlim([0,20])
+    #plt.yscale('log')
     plt.legend()
     plt.show()
 #
