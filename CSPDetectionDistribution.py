@@ -50,7 +50,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         self._base_row_decision_likelihoods= torch.zeros((self._distances.shape[0],self._distances.shape[1]+1),dtype=torch.float32)
         self._base_row_decision_likelihoods[:,:] = self._match_non_matching_loglikelihoods.detach().sum(dim=-1).unsqueeze(1)
         self._base_row_decision_likelihoods[:,:-1] += self._matching_likelihood.detach() - self._match_non_matching_loglikelihoods.detach()
-        self._base_row_decision_likelihoods[:,-1] += 0 #regularization to prevent missed matchest
+        self._base_row_decision_likelihoods[:,-1] += 0 #regularization to prevent missed matches
 
 
     def _makeDecision(self, logits: torch.tensor) -> torch.tensor:
