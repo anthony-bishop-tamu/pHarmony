@@ -54,8 +54,8 @@ def calculateDistances(reference_dfs, fragment_dfs):
     for df_name1, df1 in reference_dfs.items():
         for df_name2, df2 in fragment_dfs.items():
                 merged_df = pd.merge(df1, df2, suffixes=('_1', '_2'),how="cross")
-                merged_df['distance'] = (((merged_df['w1_1'] - merged_df['w1_2'])*0.1014/0.005) ** 2 +
-                                         ((merged_df['w2_1'] - merged_df['w2_2'])/0.005) ** 2)
+                merged_df['distance'] = (((merged_df['w1_1'] - merged_df['w1_2'])*0.1014/0.003) ** 2 +
+                                         ((merged_df['w2_1'] - merged_df['w2_2'])/0.003) ** 2)
 
                 identical = merged_df[merged_df["User_1"] == merged_df["User_2"]]['distance'].values
                 all_identical_assignments += identical.tolist()
@@ -137,7 +137,7 @@ def createMatchingFocusedPlot(ax1: matplotlib.axes.Axes, ax2: matplotlib.axes.Ax
     matching_weights = np.ones_like(matching) / (matching.size)
     low_nonMatching_weights = np.ones_like(low_nonMatching) / (orgSize)
     ax2.hist(matching, bins=bins, weights=matching_weights, label="matching", color="blue", alpha=0.5)
-    ax2.hist(nonMatching, bins=bins, weights=nonMatching/nonMatching.size, label="nonmatching", color="red", alpha=0.5)
+    ax2.hist(nonMatching, bins=bins, weights=np.ones_like(nonMatching)/orgSize, label="nonmatching", color="red", alpha=0.5)
 
     ax1.hist(matching, bins=bins, weights=matching_weights, label="matching", color="blue", alpha=0.5)
     ax1.hist(low_nonMatching, bins=bins, weights=low_nonMatching_weights, label="nonmatching", color="red", alpha=0.5)
@@ -162,7 +162,7 @@ def createMatchingFocusedPlot(ax1: matplotlib.axes.Axes, ax2: matplotlib.axes.Ax
 
     print(bins[1] - bins[0])
 
-    ax2.set_xlabel('Distance (error normalized 1H 0.003 square ppm)')
+    ax2.set_xlabel('Distance (error normalized 1H)')
     ax2.set_ylabel('Frequency')
     ax2.set_title('Histogram of Square Distances')
     ax2.set_yscale('log')
@@ -170,16 +170,20 @@ def createMatchingFocusedPlot(ax1: matplotlib.axes.Axes, ax2: matplotlib.axes.Ax
     ax2.legend()
 
     ax1.set_ylabel('Frequency')
+    ax1.set_xlabel('Distance Squared (error normalized 1H)')
     ax1.set_xlim([0,100])
     ax1.legend()
 
 def createNonMatchingFocusedPlot(ax, nonMatching):
     p1 = optimizeWeibull(nonMatching)
     bins = np.logspace(-0.5,np.log10(nonMatching.max()),100)
-    ax.hist(nonMatching,bins=bins, label="nonmatching", color="blue", alpha=0.5,density=True)
+    ax.hist(nonMatching,bins=bins, label="nonmatching", color="red", alpha=0.5,density=True)
     pdf = stats.weibull_min(p1[0],loc=p1[1],scale=p1[2]).pdf(bins)
     ax.plot(bins, pdf, 'r-', label=f'fittedDistribution')
     ax.set_xscale('log')
+    ax.set_xlabel('Distance Squared (error normalized 1H)')
+    ax.set_title('Histogram of NonMatching Distances')
+    ax.set_ylabel("Frequency")
     return p1
 
 if __name__ == "__main__":

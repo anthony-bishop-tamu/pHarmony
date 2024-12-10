@@ -46,11 +46,10 @@ def model(data,dof,no_match_distribution_parameters,initial_matching_logits,init
     csp_logits = pyro.param("csp_logits")
     cutoff = stats.chi2(dof).ppf(0.99)
 
-    csp_distribution_median = pyro.sample("csp_distribution_median",pyro.distributions.Uniform(cutoff,300))
-    csp_distribution_parameters = calculateCSPDistParameters(torch.tensor([0.02]),cutoff=torch.tensor([cutoff]),median=csp_distribution_median)
+    csp_distribution_parameters = pyro.param("csp_distribution_parameters")
 
     matching_distribution = SMCMatchingDistribution(match_logits)
-    matching_sample = pyro.sample("matching", matching_distribution, sample_shape=(100,))
+    matching_sample = pyro.sample("matching", matching_distribution, sample_shape=(1000,))
 
     matching_probabilities = calculatePositionProb(matching_sample, data.shape)
     nomatch_probabilities = 1.0 - matching_probabilities
@@ -72,9 +71,9 @@ def guide(data,dof,no_match_distribution_parameters,initial_matching_logits,init
     match_logits = pyro.param("matching_logits", initial_matching_logits)
     csp_logits = pyro.param("csp_logits",initial_csp_logits)
 
-    csp_distribution_median_map = pyro.param("csp_distribution_median_map",torch.tensor([50.0]))
+    csp_distribution_parameters = pyro.param("csp_distribution_parameters",torch.tensor([2.0,1.0]))
 
-    pyro.sample("csp_distribution_median",pyro.distributions.Delta(csp_distribution_median_map))
+    #pyro.sample("csp_distribution_p",pyro.distributions.Delta(csp_distribution_parameters))
 
     #matching_distribution = SMCMatchingDistribution(match_logits)
     #matching_sample = pyro.sample("matching", matching_distribution,sample_shape=(1000,))
@@ -106,10 +105,10 @@ def parseArguments():
 args = parseArguments()
 reference_peaks = getPeakPositionsFromFile(args.reference_peak_list,
                                                args.reference_cs_column_names,
-                                               fixedError=[0.015,0.0015])
+                                               fixedError=[0.03,0.003])
 target_peaks = getPeakPositionsFromFile(args.target_peak_list,
                                             args.target_cs_column_names,
-                                            fixedError=[0.015,0.0015])
+                                            fixedError=[0.03,0.003])
 components_distances_squared = torch.pow(reference_peaks[:,:,0].unsqueeze(dim=-2) - target_peaks[:,:,0].unsqueeze(dim=0),2)
 components_distances_squared_normalized = (
         components_distances_squared/(torch.pow(reference_peaks[:,:,1].unsqueeze(dim=-2),2) +
@@ -127,7 +126,7 @@ non_matching_params = initialNonMatchingParams(distances_squared_normalized)
 
 
 # Set up the optimizer
-optimizer = pyro.optim.Adam({"lr": 0.01})
+optimizer = pyro.optim.Adam({"lr": 0.1})
 
 # Set up SVI with the ELBO loss function
 svi = pyro.infer.SVI(model, guide, optimizer, loss=pyro.infer.Trace_ELBO())
@@ -136,7 +135,7 @@ initial_matching_logits = initialMatchinglogits(distances_squared_normalized)
 initial_csp_logits = initialCSPParams(distances_squared_normalized)
 
 # Training loop
-num_steps = 500
+num_steps = 50000
 for step in range(num_steps):
     # Perform a gradient step
     loss = svi.step(distances_squared_normalized,2,non_matching_params,initial_matching_logits,initial_csp_logits)
@@ -145,13 +144,13 @@ for step in range(num_steps):
         print(f"Step {step} : Loss = {loss}")
         optimized_matching = pyro.param("matching_logits")
         csp_logits = pyro.param("csp_logits")
-        csp_distribution_median_map = pyro.param("csp_distribution_median_map")
-        print(csp_distribution_median_map)
+        #csp_distribution_median_map = pyro.param("csp_distribution_median_map")
+        #print(csp_distribution_median_map)
 
 
 optimized_matching = pyro.param("matching_logits")
 csp_logits = pyro.param("csp_logits")
-csp_distribution_median_map = pyro.param("csp_distribution_median_map")
+csp_distribution_median_map = pyro.param("csp_distribution_parameters")
 sample = SMCMatchingDistribution(optimized_matching).sample((1000,))
 probs = calculatePositionProb(sample,optimized_matching.shape[0:2])
 print(csp_distribution_median_map)

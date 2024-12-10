@@ -1,5 +1,6 @@
 import pyro
 import torch
+from Frechet import Frechet
 class DistancesMM(pyro.distributions.TorchDistribution):
     def __init__(self, chi2_dof: torch.tensor,
                        csp_dist_params:torch.tensor,
@@ -18,8 +19,7 @@ class DistancesMM(pyro.distributions.TorchDistribution):
         self._mixtureProbabilities = mixtureProbabilities
 
         self._chi2_dist = torch.distributions.Chi2(chi2_dof)
-        self._csp_dist = torch.distributions.Weibull(concentration=self._csp_dist_params[0],
-                                                     scale=self._csp_dist_params[1])
+        self._csp_dist = Frechet(self._csp_dist_params[0],self._csp_dist_params[1])
         self._nomatch_dist = torch.distributions.Weibull(concentration=self._nomatch_dist_params[0],
                                                          scale=self._nomatch_dist_params[1])
         super(DistancesMM, self).__init__(batch_shape=torch.Size(), validate_args=validate_args)
@@ -53,7 +53,7 @@ if __name__ == '__main__':
     nomatch_params = torch.tensor([1.9,1000],dtype=torch.float32)
     mixture_probabilities = torch.rand((10,8,3))
     mixture_probabilities = (mixture_probabilities - mixture_probabilities.logsumexp(dim=2,keepdim=True)).exp()
-    dist = distancesMM(dof,csp_params,nomatch_params,mixture_probabilities)
+    dist = DistancesMM(dof,csp_params,nomatch_params,mixture_probabilities)
     sample = dist.sample(torch.Size([10]))
     log_prob = dist.log_prob(sample)
     print(log_prob)
