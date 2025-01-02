@@ -38,10 +38,12 @@ def calculateCSPDistParameters(quantile, cutoff, median):
     return torch.tensor([k,lam],dtype=torch.float32)
 #
 
+step_counter = [0]
+matching_sample_cache = [None]
 # Define the model with a latent variable
 def model(data,dof,no_match_distribution_parameters,initial_matching_logits,initial_csp_logits):
     # Latent variable z follows a normal distribution (prior)
-
+    global step_counter, matching_sample_cache
     match_logits = pyro.param("matching_logits")
     csp_logits = pyro.param("csp_logits")
     cutoff = stats.chi2(dof).ppf(0.99)
@@ -49,9 +51,9 @@ def model(data,dof,no_match_distribution_parameters,initial_matching_logits,init
     csp_distribution_parameters = pyro.param("csp_distribution_parameters")
 
     matching_distribution = SMCMatchingDistribution(match_logits)
-    matching_sample = pyro.sample("matching", matching_distribution, sample_shape=(1000,))
+    matching_sample_cache[0] = pyro.sample("matching", matching_distribution, sample_shape=(100,))
 
-    matching_probabilities = calculatePositionProb(matching_sample, data.shape)
+    matching_probabilities = calculatePositionProb(matching_sample_cache[0], data.shape)
     nomatch_probabilities = 1.0 - matching_probabilities
     csp_probits = (csp_logits - csp_logits.logsumexp(dim=2,keepdim=True)).exp()
     no_csp_probabilites = matching_probabilities*csp_probits[:,:,0]
@@ -71,7 +73,7 @@ def guide(data,dof,no_match_distribution_parameters,initial_matching_logits,init
     match_logits = pyro.param("matching_logits", initial_matching_logits)
     csp_logits = pyro.param("csp_logits",initial_csp_logits)
 
-    csp_distribution_parameters = pyro.param("csp_distribution_parameters",torch.tensor([2.0,1.0]))
+    csp_distribution_parameters = pyro.param("csp_distribution_parameters",torch.tensor([2.0,20]))
 
     #pyro.sample("csp_distribution_p",pyro.distributions.Delta(csp_distribution_parameters))
 
@@ -101,6 +103,17 @@ def parseArguments():
 
     return parser.parse_args()
 #
+class CustomTraceELBO(pyro.infer.Trace_ELBO):
+    def loss_and_grads(self, model, guide, *args, **kwargs):
+        # Call the hook to examine the log-likelihood
+        for model_trace, guide_trace in self._get_traces(model, guide, args, kwargs):
+          for name, site in model_trace.nodes.items():
+            if site["type"] == "sample":
+                print(f"{name}, log_prob_sum {site['log_prob_sum'].item()}")
+
+        # Continue with normal ELBO computation
+        return super().loss_and_grads(model, guide,*args, **kwargs)
+#
 
 args = parseArguments()
 reference_peaks = getPeakPositionsFromFile(args.reference_peak_list,
@@ -129,7 +142,7 @@ non_matching_params = initialNonMatchingParams(distances_squared_normalized)
 optimizer = pyro.optim.Adam({"lr": 0.1})
 
 # Set up SVI with the ELBO loss function
-svi = pyro.infer.SVI(model, guide, optimizer, loss=pyro.infer.Trace_ELBO())
+svi = pyro.infer.SVI(model, guide, optimizer, loss=CustomTraceELBO())
 
 initial_matching_logits = initialMatchinglogits(distances_squared_normalized)
 initial_csp_logits = initialCSPParams(distances_squared_normalized)
@@ -137,10 +150,11 @@ initial_csp_logits = initialCSPParams(distances_squared_normalized)
 # Training loop
 num_steps = 50000
 for step in range(num_steps):
+    step_counter[0] = step
     # Perform a gradient step
     loss = svi.step(distances_squared_normalized,2,non_matching_params,initial_matching_logits,initial_csp_logits)
 
-    if step % 50 == 0:
+    if step % 1 == 0:
         print(f"Step {step} : Loss = {loss}")
         optimized_matching = pyro.param("matching_logits")
         csp_logits = pyro.param("csp_logits")

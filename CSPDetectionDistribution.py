@@ -22,29 +22,29 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         self._non_matching_distribution_parameters = non_matching_distribution_parameters
         self._non_matching_distribution = dist.Weibull(concentration=self._non_matching_distribution_parameters[0],
                                                        scale=self._non_matching_distribution_parameters[1]) #location scale
-        self._no_csp_distribution = torch.distributions.Chi2(2.0) #chi2 distribution for
+        self._no_csp_distribution = torch.distributions.Chi2(torch.tensor([2.0],dtype=torch.float64)) #chi2 distribution for
 
-        self.eps_float32 = torch.finfo(torch.float32).eps
-        self.max_float32 = torch.finfo(torch.float32).max
-        self.min_float32 = torch.finfo(torch.float32).min
+        self.eps_float64 = torch.finfo(torch.float64).eps
+        self.max_float64 = torch.finfo(torch.float64).max
+        self.min_float64 = torch.finfo(torch.float64).min
         self._event_shape = torch.Size([self._distances.shape[0],3])
+        self._prior_match = torch.log(torch.tensor([self._distances.shape[0]/self._distances.numel()]))
+        self._prior_nonmatch = torch.log(torch.tensor([ 1.0 - self._distances.shape[0]/self._distances.numel()]))
 
 
-        self._loglikelihoodMatrix = torch.stack((self._no_csp_distribution.log_prob(self._distances).clamp(min=self.min_float32),
-                                                self._csp_distribution.log_prob(self._distances).clamp(min=self.min_float32),
-                                                self._non_matching_distribution.log_prob(self._distances).clamp(min=self.min_float32)),dim=2)
-
-
+        self._loglikelihoodMatrix = torch.stack((self._no_csp_distribution.log_prob(self._distances).clamp(min=self.min_float64),
+                                                self._csp_distribution.log_prob(self._distances).clamp(min=self.min_float64),
+                                                self._non_matching_distribution.log_prob(self._distances).clamp(min=self.min_float64)),dim=2)
         self._event_shape = (self._distances.shape[0],)
+
         assert not self._loglikelihoodMatrix.isnan().any()
     #
 
     def _calculateDecisionLogLikelihood(self):
         #parameter corrected loglikelihoods
-        self._match_non_matching_loglikelihoods = self._loglikelihoodMatrix[:, :, 2]
+        self._match_non_matching_loglikelihoods = self._loglikelihoodMatrix[:, :, 2] + self._prior_nonmatch
         normalized_parameters = self._csp_probability_parameters - self._csp_probability_parameters.logsumexp(dim=2,keepdim=True)
-        self._matching_likelihood = (self._loglikelihoodMatrix[:, :,0:2]+normalized_parameters).logsumexp(dim=2)
-
+        self._matching_likelihood = (self._loglikelihoodMatrix[:, :,0:2]+normalized_parameters).logsumexp(dim=2) + self._prior_match
 
         self._base_row_decision_likelihoods= torch.zeros((self._distances.shape[0],self._distances.shape[1]+1),dtype=torch.float32)
         self._base_row_decision_likelihoods[:,:] = self._match_non_matching_loglikelihoods.detach().sum(dim=-1).unsqueeze(1)
@@ -82,8 +82,8 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         #neg_entropy_tensor[...,:] = self._calculateNextParticleNegativeEntropies(row_decision_matrix)
 
         #prob_tensor = (neg_entropy_tensor - neg_entropy_tensor.logsumexp(dim=-1,keepdim=True)).exp()
-        prob_tensor = availableRows.type(torch.float32)
-        sampled_rows = torch.multinomial(prob_tensor.type(torch.float32),1).type(torch.int32).squeeze(-1)
+        prob_tensor = availableRows.type(torch.float64)
+        sampled_rows = torch.multinomial(prob_tensor.type(torch.float64),1).type(torch.int32).squeeze(-1)
         probabilities = row_decision_matrix[sample_indicies,sampled_rows,:] - row_decision_matrix[sample_indicies,sampled_rows,:].logsumexp(dim=-1,keepdim=True)
         matched_columns = torch.multinomial(probabilities.exp(),1).type(torch.int32).squeeze()
 
@@ -91,22 +91,21 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
         availableRows[sample_indicies, sampled_rows] = False
 
-        decision_log[sample_indicies,decision_counter,0] = sampled_rows.type(torch.float32)
-        decision_log[sample_indicies, decision_counter, 2] = row_decision_matrix[sample_indicies, sampled_rows, matched_columns].type(torch.float32)
-        #l_partial_log_likelihood = row_decision_matrix[sample_indicies, sampled_rows, matched_columns]
-        
-        #l_partial_log_likelihood[~no_matched_columns] += (self._match_non_matching_loglikelihoods[:,matched_columns[~no_matched_columns]].transpose(0,1)*availableRows[~no_matched_columns,:]).sum(dim=-1)
-        
-        decision_log[sample_indicies,decision_counter, 3] = torch.log(prob_tensor[sample_indicies, sampled_rows]/prob_tensor[sample_indicies].sum(dim=-1))
-        #decision_log[sample_indicies,decision_counter, 3] = probabilities[torch.arange(probabilities.size(0)),matched_columns] + torch.log(prob_tensor[sample_indicies, sampled_rows]/prob_tensor[sample_indicies].sum(dim=-1))
+        row_probabilities = torch.log(prob_tensor[sample_indicies, sampled_rows]/prob_tensor[sample_indicies].sum(dim=-1))
+        decision_log[sample_indicies,decision_counter,0] = sampled_rows.type(torch.float64)
+        decision_log[sample_indicies, decision_counter, 2] = row_decision_matrix[sample_indicies, sampled_rows, matched_columns].type(torch.float64) #+row_probabilities
 
-        #sample_weights += l_partial_log_likelihood - decision_log[sample_indicies,decision_counter,2] - decision_log[:, decision_counter, 3]
-        sample_weights += -decision_log[:, decision_counter, 3]
+
+        decision_log[sample_indicies,decision_counter, 3] += row_probabilities
+
+
+        #sample_weights += decision_log[sample_indicies,decision_counter,2]-decision_log[:, decision_counter, 3]
+        sample_weights += row_probabilities
 
 
 
         matched_columns[no_matched_columns] = -1
-        decision_log[sample_indicies,decision_counter,1] = matched_columns.type(torch.float32)
+        decision_log[sample_indicies,decision_counter,1] = matched_columns.type(torch.float64)
 
         sample[sample_indicies,sampled_rows]=matched_columns
 
@@ -148,15 +147,15 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
     def _sample(self, sample_shape=torch.Size()) -> torch.tensor:
         availableRows = torch.ones(sample_shape+(self._distances.shape[0],), dtype=torch.bool)
         sample = torch.full(sample_shape+self._event_shape, -2, dtype=torch.int32)
-        sample_weights = torch.zeros(sample_shape, dtype=torch.float32)
+        sample_weights = torch.zeros(sample_shape, dtype=torch.float64)
         sample_indexes = torch.unique(torch.nonzero(torch.ones_like(sample))[:, :-1])
         self._calculateDecisionLogLikelihood()
 
-        row_decision_matrix = torch.zeros(sample_shape+(self._distances.shape[0],self._distances.shape[1]+1), dtype=torch.float32)
+        row_decision_matrix = torch.zeros(sample_shape+(self._distances.shape[0],self._distances.shape[1]+1), dtype=torch.float64)
         row_decision_matrix[...,:,:] = self._base_row_decision_likelihoods[:,:]
-        neg_entropy_tensor = torch.zeros_like(availableRows,dtype=torch.float32)
-        partial_log_likelihood = torch.zeros(sample_shape,dtype=torch.float32)
-        decision_log = torch.full(sample_shape+(self._distances.shape[0],4),-2, dtype=torch.float32)
+        neg_entropy_tensor = torch.zeros_like(availableRows,dtype=torch.float64)
+        partial_log_likelihood = torch.zeros(sample_shape,dtype=torch.float64)
+        decision_log = torch.full(sample_shape+(self._distances.shape[0],4),-2, dtype=torch.float64)
         decision_counter = 0
         while availableRows.any():
             self.__getNextInSequence(sample, sample_indexes, availableRows, sample_weights, row_decision_matrix,neg_entropy_tensor,partial_log_likelihood,decision_log,decision_counter)
@@ -176,18 +175,15 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
     def log_prob(self, sample):
         #sample_weights should be logits
         self._calculateDecisionLogLikelihood()
-        non_matching_totalloglikelihood = self._match_non_matching_loglikelihoods.sum()
         matched_mask = sample != -1
         match_rows = torch.nonzero(matched_mask)
         match_columns = sample[matched_mask]
-        #log_prob = (non_matching_totalloglikelihood -
-        #        self._loglikelihoodMatrix[match_rows[...,1],match_columns,2] +
-        #        self._matching_likelihood[match_rows[...,1],match_columns])
-        log_prob = -1*self._loglikelihoodMatrix[match_rows[...,1],match_columns,2] + self._matching_likelihood[match_rows[...,1],match_columns]
+        nomatch_rows = torch.nonzero(~matched_mask)
+        nomatch_columns = sample[~matched_mask]
+        log_prob = self._match_non_matching_loglikelihoods[nomatch_rows[...,1],nomatch_columns].sum() + self._matching_likelihood[match_rows[...,1],match_columns].sum()
 
 
-
-        return log_prob.sum()
+        return log_prob.sum()/sample.numel()
 
     def csp_distribution_parameters(self):
         return self._csp_distribution_parameters

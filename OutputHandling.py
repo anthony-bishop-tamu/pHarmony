@@ -27,23 +27,32 @@ def buildPlot(matchingProbabilities: np.array,
 
         csp_weight = csp_probabilities[matching_mask].sum()/matching_mask.sum()
 
-        nocsp_pdf = no_csp_match_distribution.log_prob(bins).exp().detach().numpy()*(1-csp_weight)
-        csp_pdf = csp_distribution.log_prob(bins).exp().detach().numpy()*csp_weight
-        ax1.plot(bins,nocsp_pdf,color='red',label='No CSP')
-        ax1.plot(bins,csp_pdf,color='blue',label='CSP Distribution')
-        ax1.plot(bins,nocsp_pdf+csp_pdf,color='green',label='All matches',linestyle='--')
+        nocsp_pdf = no_csp_match_distribution.log_prob(bins).exp().detach().numpy()
+        csp_pdf = csp_distribution.log_prob(bins).exp().detach().numpy()
+        ax1.plot(bins,nocsp_pdf*(1-csp_weight),color='red',label='No CSP')
+        ax1.plot(bins,csp_pdf*csp_weight,color='blue',label='CSP Distribution')
+        ax1.plot(bins,nocsp_pdf*(1-csp_weight)+csp_pdf*csp_weight,color='green',label='All matches',linestyle='--')
+        ax1.plot(bins,csp_pdf,color='magenta',label='Unweighted CSP Distribution')
+        ax1.plot(bins,nocsp_pdf,color='cyan',label='Unweighted No CSP Distribution')
         ax1.plot(bins[1:],non_match_distribution.log_prob(bins[1:]).exp().detach().numpy(),color='orange',label='NonMatchDistribution')
 
         #log scale plot
-        ax2.hist(matches, bins=bins, color='blue', label='Matches', alpha=0.5, density=True)
-        ax2.hist(low_nonMatches, bins=bins, weights=np.ones_like(low_nonMatches) / non_matches.size(), color='red',
+        log_bins = np.logspace(-0.5,np.log10(non_matches.max()),100)
+        nocsp_pdf = no_csp_match_distribution.log_prob(torch.from_numpy(log_bins)).exp().detach().numpy()
+        csp_pdf = csp_distribution.log_prob(torch.from_numpy(log_bins)).exp().detach().numpy()
+        ax2.hist(matches, bins=log_bins, color='blue', label='Matches', alpha=0.5, density=True)
+        ax2.hist(non_matches, bins=log_bins, density=True, color='red',
                  label='nonMatches', alpha=0.5)
-        ax2.plot(bins, nocsp_pdf + csp_pdf, color='green', label='All matches', linestyle='--')
-        ax2.plot(bins[1:], non_match_distribution.log_prob(bins[1:]).exp().detach().numpy(), color='orange',
+        ax2.set_yscale('log')
+        ax2_ylim = ax2.get_ylim()
+        ax2.plot(log_bins, nocsp_pdf, color='green', label='Unweighted no CSP Distribution', linestyle='--')
+        ax2.plot(log_bins, csp_pdf, color='magenta', label='weighted CSP Distribution', linestyle='--')
+        ax2.plot(log_bins, non_match_distribution.log_prob(torch.from_numpy(log_bins)).exp().detach().numpy(), color='orange',
                  label='NonMatchDistribution')
 
         ax2.set_xscale('log')
         ax2.set_yscale('log')
+        ax2.set_ylim(ax2_ylim)
 
         ax1.set_xlabel('Normalized Squared Distances')
         ax2.set_xlabel('Normalized Squared Distances')
@@ -53,7 +62,7 @@ def buildPlot(matchingProbabilities: np.array,
         ax1.legend(loc='upper right')
         ax2.legend(loc='upper right')
 
-        log_bins = np.logspace(-0.5,np.log10(non_matches.max()),100)
+
         ax3.hist(non_matches, bins=log_bins, color='red', label='NonMatches', alpha=0.5, density=True)
         ax3.plot(log_bins, non_match_distribution.log_prob(torch.from_numpy(log_bins)).exp().detach().numpy(), color='red', label='Non matching distances')
 
@@ -63,8 +72,7 @@ def buildPlot(matchingProbabilities: np.array,
         ax3.set_xlabel('Normalized Squared Distances')
 
         fig.tight_layout()
-        fig.show()
-        fig.savefig(distributionPlot)
+        return fig
 #
 def outputResults(matchingProbabilities: np.array,
                                 csp_probabilities: np.array,

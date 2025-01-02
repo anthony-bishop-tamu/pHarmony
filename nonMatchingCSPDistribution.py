@@ -61,6 +61,7 @@ def calculateDistances(reference_dfs, fragment_dfs):
                 all_identical_assignments += identical.tolist()
                 nonidentical = merged_df[merged_df["User_1"] != merged_df["User_2"]]['distance'].values
                 all_non_identical_assignments += nonidentical.tolist()
+                #assert( (nonidentical > 1).all())
             #
         #
     #
@@ -115,8 +116,8 @@ def optimizeMiture(data,k):
     return alpha_mle, scale_mle, mix_prob
 #
 
-def optimizeWeibull(distances):
-    p1 = stats.weibull_min.fit(distances)
+def optimizelognorm(distances):
+    p1 = stats.lognorm.fit(distances)
     return p1
 #
 def createMatchingFocusedPlot(ax1: matplotlib.axes.Axes, ax2: matplotlib.axes.Axes,matching, nonMatching,dof):
@@ -175,10 +176,10 @@ def createMatchingFocusedPlot(ax1: matplotlib.axes.Axes, ax2: matplotlib.axes.Ax
     ax1.legend()
 
 def createNonMatchingFocusedPlot(ax, nonMatching):
-    p1 = optimizeWeibull(nonMatching)
+    p1 = optimizelognorm(nonMatching)
     bins = np.logspace(-0.5,np.log10(nonMatching.max()),100)
     ax.hist(nonMatching,bins=bins, label="nonmatching", color="red", alpha=0.5,density=True)
-    pdf = stats.weibull_min(p1[0],loc=p1[1],scale=p1[2]).pdf(bins)
+    pdf = stats.lognorm(p1[0],loc=p1[1],scale=p1[2]).pdf(bins)
     ax.plot(bins, pdf, 'r-', label=f'fittedDistribution')
     ax.set_xscale('log')
     ax.set_xlabel('Distance Squared (error normalized 1H)')

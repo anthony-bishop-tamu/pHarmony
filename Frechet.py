@@ -20,3 +20,19 @@ class Frechet(torch.distributions.Distribution):
         # Log probability of the Fréchet distribution
         z = x / self.scale
         return torch.log(self.alpha)  - torch.log(self.scale) - (self.alpha + 1) * torch.log(z) - z ** (-self.alpha)
+
+    def median(self):
+        return (self.scale/torch.pow(torch.log(torch.tensor([2.0])), 1.0/self.alpha))
+
+    def mode(self):
+        return self.scale*torch.pow(self.alpha/(1+self.alpha), 1.0/self.alpha)
+
+    @property
+    def variance(self):
+        if self.alpha < 2.0:
+            return torch.tensor([torch.inf])
+        else:
+            return self.scale*self.scale*(torch.lgamma(1-2.0/self.alpha).exp() - torch.lgamma(1-1.0/self.alpha).exp()**2)
+        #
+
+

@@ -2,7 +2,15 @@ import pyro
 import torch
 import numpy as np
 import pyro.distributions.constraints as constraints
-
+def calculatePositionProb(sample, shape):
+    positionProbs = torch.zeros(shape, dtype=torch.float32)
+    rows = torch.arange(shape[0]).unsqueeze(0).expand(sample.shape[0], shape[0])
+    mask = sample.flatten() >= 0
+    positionProbs.index_put_((rows.flatten()[mask], sample.flatten()[mask]), torch.tensor([1.0/sample.shape[0]]), accumulate=True)
+    unique_elements, counts = torch.unique(sample, return_counts=True, dim=1)
+    assert (positionProbs.sum(dim=-1) < 1.0+1E-3).all() and (positionProbs.sum(dim=0) < 1.0+1E-3).all()
+    return positionProbs
+#
 class SMCMatchingDistribution(pyro.distributions.TorchDistribution):
     arg_constraints = { "_matching_logits": constraints.real}
     def __init__(self, matching_logits: torch.tensor,validate_args=None):
@@ -23,7 +31,6 @@ class SMCMatchingDistribution(pyro.distributions.TorchDistribution):
 
     def _calculateDecisionMatrix(self):
         #parameter corrected loglikelihoods
-
 
         self._base_row_decision_likelihoods= torch.zeros((self._matching_logits.shape[0],
                                                           self._matching_logits.shape[1]+1),dtype=torch.float32)
@@ -46,13 +53,14 @@ class SMCMatchingDistribution(pyro.distributions.TorchDistribution):
         no_matched_columns = matched_columns >= self._matching_logits.shape[1]
 
         availableRows[sample_indicies,sampled_rows] = False
+        row_probabilities = torch.log(prob_tensor[sample_indicies,sampled_rows]/prob_tensor[sample_indicies,sampled_rows])
 
         decision_log[sample_indicies,decision_counter,0] = sampled_rows.type(torch.float32)
         decision_log[sample_indicies, decision_counter, 2] = row_decision_matrix[sample_indicies, sampled_rows, matched_columns].type(torch.float32)
-        partial_log_likelihood += row_decision_matrix[sample_indicies, sampled_rows, matched_columns]
-        decision_log[sample_indicies,decision_counter, 3] = -prob_tensor[sample_indicies, sampled_rows]
 
-        sample_weights += decision_log[:, decision_counter, 3]
+        decision_log[sample_indicies,decision_counter, 3] += row_probabilities
+
+        sample_weights += row_probabilities
 
         matched_columns[no_matched_columns] = -1
         decision_log[sample_indicies,decision_counter,1] = matched_columns.type(torch.float32)
@@ -118,13 +126,13 @@ class SMCMatchingDistribution(pyro.distributions.TorchDistribution):
     def log_prob(self, sample, sample_shape=torch.Size([])):
         #sample_weights should be logits
         self._calculateDecisionMatrix()
-        non_matching_totalloglikelihood = self._matching_logits[:,:,1].sum()
         matched_mask = sample != -1
         match_rows = torch.nonzero(matched_mask)
         match_columns = sample[matched_mask]
-        log_prob = (non_matching_totalloglikelihood -
-                self._matching_logits[match_rows[...,1],match_columns,1].sum() +
-                self._matching_logits[match_rows[...,1],match_columns,0].sum())
+        nomatch_rows = torch.nonzero(~matched_mask)
+        nomatch_columns = sample[~matched_mask]
+        log_prob = self._matching_logits[nomatch_rows[..., 1], nomatch_columns,1].sum() + \
+                   self._matching_logits[match_rows[..., 1], match_columns,0].sum()
 
         return log_prob
 
@@ -134,11 +142,12 @@ class SMCMatchingDistribution(pyro.distributions.TorchDistribution):
 
 #
 if __name__ == '__main__':
-    dim = 500
+    dim = 100
     logits = torch.rand((dim,dim,2),dtype=torch.float32)
-    logits[:,:,0] += torch.eye(dim,dtype=torch.float32)*10.0
+    logits[:,:,0] += torch.eye(dim,dtype=torch.float32)*20
 
     dist = SMCMatchingDistribution(logits)
     samples = dist.sample(torch.Size([1000]))
     print(samples)
+    positionProb = calculatePositionProb(samples,logits.shape[:-1]).numpy()
     log_prob = dist.log_prob(samples)
