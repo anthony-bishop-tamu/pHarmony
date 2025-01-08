@@ -1,36 +1,48 @@
 import torch
 import pyro.distributions as dist
+import torch.distributions as torchdist
 import torch.nn.functional as F
-from Frechet import Frechet
+from Frechet import Frechet, KDEDensity, LogTransformedKDEDensity
 import numpy as np
+def logisticDistribution(loc,scale):
+    base_distribution = torchdist.Uniform(0, 1)
+    transforms = [torchdist.transforms.SigmoidTransform().inv, torchdist.transforms.AffineTransform(loc=loc, scale=scale)]
+    logistic = torchdist.transformed_distribution.TransformedDistribution(base_distribution, transforms)
+    return logistic
+#
 class CSPDetectionDistribution(torch.distributions.Distribution):
     def __init__(self, distances: torch.tensor,
-                 csp_prob_parameters: torch.tensor,
+                 csp_mixture_weights: torch.tensor,
+                 matching_mixture_weights: torch.tensor,
                  csp_distribution_parameters: torch.tensor,
-                 non_matching_distribution_parameters: torch.tensor):
+                 non_matching_parameters: torch.tensor):
         super().__init__()
         assert(distances.shape[0] >= distances.shape[1])
-        assert(distances.shape + (2,) == csp_prob_parameters.shape)
         assert(csp_distribution_parameters.shape == (2,)) #Gaussian parameters mean, std
-        assert(non_matching_distribution_parameters.shape == (2,)) #Weibull distribution parameters scale, concentration
+        assert((2,) == csp_mixture_weights.shape)
+        assert ((2,) == matching_mixture_weights.shape)
+        assert((2,) == non_matching_parameters.shape)
 
         self._distances = distances
-        self._csp_probability_parameters = csp_prob_parameters # logits
+
+        self._csp_mixture_weights = csp_mixture_weights - csp_mixture_weights.logsumexp(dim=0,keepdim=True)
+        self._matching_mixture_weights = matching_mixture_weights - matching_mixture_weights.logsumexp(dim=0, keepdim=True)
         self._csp_distribution_parameters = csp_distribution_parameters
         self._csp_distribution = Frechet(alpha=self._csp_distribution_parameters[0],
                                          scale=self._csp_distribution_parameters[1])
-        self._non_matching_distribution_parameters = non_matching_distribution_parameters
-        self._non_matching_distribution = dist.Weibull(concentration=self._non_matching_distribution_parameters[0],
-                                                       scale=self._non_matching_distribution_parameters[1]) #location scale
+        self._non_matching_parameters = non_matching_parameters
+       # self._non_matching_parameters =
+        self._non_matching_distribution = dist.Weibull(concentration=self._non_matching_parameters[0],
+                                                       scale=self._non_matching_parameters[1])
+
+
+
         self._no_csp_distribution = torch.distributions.Chi2(torch.tensor([2.0],dtype=torch.float64)) #chi2 distribution for
 
         self.eps_float64 = torch.finfo(torch.float64).eps
         self.max_float64 = torch.finfo(torch.float64).max
         self.min_float64 = torch.finfo(torch.float64).min
         self._event_shape = torch.Size([self._distances.shape[0],3])
-        self._prior_match = torch.log(torch.tensor([self._distances.shape[0]/self._distances.numel()]))
-        self._prior_nonmatch = torch.log(torch.tensor([ 1.0 - self._distances.shape[0]/self._distances.numel()]))
-
 
         self._loglikelihoodMatrix = torch.stack((self._no_csp_distribution.log_prob(self._distances).clamp(min=self.min_float64),
                                                 self._csp_distribution.log_prob(self._distances).clamp(min=self.min_float64),
@@ -41,10 +53,17 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
     #
 
     def _calculateDecisionLogLikelihood(self):
+        unnormalized_csp_posterior_probabilities = self._loglikelihoodMatrix[:,:,0:2].detach() + self._csp_mixture_weights.detach()
+        self._csp_posterior_probabilities = unnormalized_csp_posterior_probabilities - unnormalized_csp_posterior_probabilities.logsumexp(dim=-1,keepdim=True)
+
+        unweighted_matching_loglikelihoods = (self._loglikelihoodMatrix[:,:,0:2] + self._csp_mixture_weights.detach()).logsumexp(dim=-1)
         #parameter corrected loglikelihoods
-        self._match_non_matching_loglikelihoods = self._loglikelihoodMatrix[:, :, 2] + self._prior_nonmatch
-        normalized_parameters = self._csp_probability_parameters - self._csp_probability_parameters.logsumexp(dim=2,keepdim=True)
-        self._matching_likelihood = (self._loglikelihoodMatrix[:, :,0:2]+normalized_parameters).logsumexp(dim=2) + self._prior_match
+
+        final_matching_likelihoods = (torch.stack([unweighted_matching_loglikelihoods,self._loglikelihoodMatrix[:,:,2]],dim=2)
+                                                  + self._matching_mixture_weights.detach())
+
+        self._matching_likelihood = final_matching_likelihoods[:,:,0]
+        self._match_non_matching_loglikelihoods = final_matching_likelihoods[:,:,1]
 
         self._base_row_decision_likelihoods= torch.zeros((self._distances.shape[0],self._distances.shape[1]+1),dtype=torch.float32)
         self._base_row_decision_likelihoods[:,:] = self._match_non_matching_loglikelihoods.detach().sum(dim=-1).unsqueeze(1)
@@ -185,24 +204,38 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
         return log_prob.sum()/sample.numel()
 
-    def csp_distribution_parameters(self):
+    @property
+    def csp_distribution_parameters(self) -> torch.Tensor:
         return self._csp_distribution_parameters
 
-    def csp_probability_parameters(self):
-        return self._csp_probability_parameters
-
-    def csp_distribution(self):
+    @property
+    def matching_posterior_probabilities(self) -> torch.Tensor:
+        return self._matching_posterior_probabilities
+    @property
+    def csp_posterior_probabilities(self) -> torch.Tensor:
+        return self._csp_posterior_probabilities
+    @property
+    def non_matching_distribution_parameters(self) -> torch.Tensor:
+        return self._non_matching_distribution_parameters
+    @property
+    def csp_distribution(self) -> torch.distributions.Distribution:
         return self._csp_distribution
 
-    def no_csp_distribution(self):
+    @property
+    def no_csp_distribution(self) -> torch.distributions.Distribution:
         return self._no_csp_distribution
 
-    def non_matching_distribution(self):
+    @property
+    def non_matching_distribution(self) -> torch.distributions.Distribution:
         return self._non_matching_distribution
 
     @property
     def distances(self) -> torch.Tensor:
         return self._distances
+    @property
+    def mixture_weights(self) -> torch.Tensor:
+        return self._mixture_weights
+
 
 
 

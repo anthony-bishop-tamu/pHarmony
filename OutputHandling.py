@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from matplotlib import pyplot as plt
 def buildPlot(matchingProbabilities: np.array,
-              csp_probabilities: np.array,
+              csp_mixture_weights: np.array,
               no_csp_match_distribution: torch.distributions.Distribution,
               csp_distribution: torch.distributions.Distribution,
               non_match_distribution: torch.distributions.Distribution,
@@ -18,37 +18,47 @@ def buildPlot(matchingProbabilities: np.array,
 
         matches = distances[matching_mask].flatten()
         non_matches = distances[non_match_mask].flatten()
-        low_nonMatches = non_matches[non_matches < matches.max()]
 
-        bins = np.arange(0,matches.max(),1.0)
-        ax1.hist(matches, bins=bins,color='blue',label='Matches',alpha=0.5,density=True)
-        ax1.hist(low_nonMatches, bins=bins,weights=np.ones_like(low_nonMatches)/non_matches.size(),color='red',label='nonMatches',alpha=0.5)
+        low_max = 100
+
+        if matches.numel() > 0:
+            low_max = matches.max()
+
+        low_nonMatches = non_matches[non_matches < low_max]
+
+        bins = np.arange(0,low_max,1.0)
+        ax1.hist(matches, bins=bins,color='blue',label='Matches',alpha=0.5,weights=np.ones_like(matches)/(non_matches.size()[0]+matches.size()[0]))
+        ax1.hist(low_nonMatches, bins=bins,weights=np.ones_like(low_nonMatches)/(non_matches.size()[0]+matches.size()[0]),color='red',label='nonMatches',alpha=0.5)
         bins = torch.from_numpy(bins)
 
-        csp_weight = csp_probabilities[matching_mask].sum()/matching_mask.sum()
+        matching_mixture_weights = np.array([matchingProbabilities.sum(), (1.0 - matchingProbabilities).sum()])/matchingProbabilities.numel()
 
         nocsp_pdf = no_csp_match_distribution.log_prob(bins).exp().detach().numpy()
         csp_pdf = csp_distribution.log_prob(bins).exp().detach().numpy()
-        ax1.plot(bins,nocsp_pdf*(1-csp_weight),color='red',label='No CSP')
-        ax1.plot(bins,csp_pdf*csp_weight,color='blue',label='CSP Distribution')
-        ax1.plot(bins,nocsp_pdf*(1-csp_weight)+csp_pdf*csp_weight,color='green',label='All matches',linestyle='--')
-        ax1.plot(bins,csp_pdf,color='magenta',label='Unweighted CSP Distribution')
-        ax1.plot(bins,nocsp_pdf,color='cyan',label='Unweighted No CSP Distribution')
-        ax1.plot(bins[1:],non_match_distribution.log_prob(bins[1:]).exp().detach().numpy(),color='orange',label='NonMatchDistribution')
+        ax1.plot(bins,nocsp_pdf*csp_mixture_weights[0]*matching_mixture_weights[0],color='red',label='No CSP')
+        ax1.plot(bins,csp_pdf*csp_mixture_weights[1]*matching_mixture_weights[0],color='blue',label='CSP Distribution')
+        ax1.plot(bins,(nocsp_pdf*csp_mixture_weights[0]+csp_pdf*csp_mixture_weights[1])*matching_mixture_weights[0],color='green',label='All matches',linestyle='--')
+        ax1.plot(bins[1:],non_match_distribution.log_prob(bins[1:]).exp().detach().numpy()*matching_mixture_weights[1],color='orange',label='NonMatchDistribution')
 
         #log scale plot
         log_bins = np.logspace(-0.5,np.log10(non_matches.max()),100)
-        nocsp_pdf = no_csp_match_distribution.log_prob(torch.from_numpy(log_bins)).exp().detach().numpy()
-        csp_pdf = csp_distribution.log_prob(torch.from_numpy(log_bins)).exp().detach().numpy()
-        ax2.hist(matches, bins=log_bins, color='blue', label='Matches', alpha=0.5, density=True)
-        ax2.hist(non_matches, bins=log_bins, density=True, color='red',
-                 label='nonMatches', alpha=0.5)
+
+        matches_hist, edges = np.histogram(matches, bins=log_bins)
+        nonmatches_hist, edges = np.histogram(non_matches, bins=log_bins)
+
+        bin_widths = np.diff(edges)
+
+        total = np.sum(matches_hist)+np.sum(nonmatches_hist)
+
+        ax2.bar(edges[:-1], matches_hist/(bin_widths*total), width=bin_widths, align='edge', color='blue', label='Matches', alpha=0.5)
+        ax2.bar(edges[:-1], nonmatches_hist/(bin_widths*total), width=bin_widths, align='edge', color='red', label='nonMatches', alpha=0.5)
+
         ax2.set_yscale('log')
         ax2_ylim = ax2.get_ylim()
-        ax2.plot(log_bins, nocsp_pdf, color='green', label='Unweighted no CSP Distribution', linestyle='--')
-        ax2.plot(log_bins, csp_pdf, color='magenta', label='weighted CSP Distribution', linestyle='--')
-        ax2.plot(log_bins, non_match_distribution.log_prob(torch.from_numpy(log_bins)).exp().detach().numpy(), color='orange',
+        ax2.plot(log_bins, non_match_distribution.log_prob(torch.from_numpy(log_bins)).exp().detach().numpy()*matching_mixture_weights[1], color='orange',
                  label='NonMatchDistribution')
+        ax2.plot(log_bins,no_csp_match_distribution.log_prob(torch.from_numpy(log_bins)).exp().detach().numpy()*csp_mixture_weights[0]*matching_mixture_weights[0],color='red',label='No CSP')
+        ax2.plot(log_bins,csp_distribution.log_prob(torch.from_numpy(log_bins)).exp().detach().numpy()*csp_mixture_weights[1]*matching_mixture_weights[0],color='blue',label='CSP Distribution')
 
         ax2.set_xscale('log')
         ax2.set_yscale('log')
@@ -75,7 +85,7 @@ def buildPlot(matchingProbabilities: np.array,
         return fig
 #
 def outputResults(matchingProbabilities: np.array,
-                                csp_probabilities: np.array,
+                                state_probability: np.array,
                                 referencePeakList: tuple, #tuple of a pandas dataframe and the dimension (0 or 1) in the representation, and a list of the resonance columns
                                 targetPeakList: tuple, #tuple of a pandas dataframe and the dimension (0 or 1) in the representation
                                 transferedPeaklist: str,
@@ -109,8 +119,7 @@ def outputResults(matchingProbabilities: np.array,
     probability_df.to_csv(probabilityTable)
 
     #output csp_probability matches
-    matching_corrected_probability = csp_probabilities*matchingProbabilities
-    csp_corrected_probability_df = pd.DataFrame(matching_corrected_probability)
+    csp_corrected_probability_df = pd.DataFrame(state_probability[:,:,1])
     csp_corrected_probability_df.columns = column_labels
     csp_corrected_probability_df.index = row_labels
     csp_corrected_probability_df.to_csv(chemicalShiftProbabilityTable)
@@ -120,7 +129,7 @@ def outputResults(matchingProbabilities: np.array,
         match_probs = matchingProbabilities.max(axis=1)
         column_indexes = matchingProbabilities.argmax(axis=1)
         row_indexes = np.arange(matchingProbabilities.shape[0])
-        csp_confidences = matching_corrected_probability[row_indexes,column_indexes]
+        csp_confidences = state_probability[row_indexes,column_indexes,1]
         referencePeaks = referencePeakList[0].iloc[row_indexes][["Assignment"]]
         targetPeaks = targetPeakList[0].iloc[column_indexes][targetPeakList[2]]
         referencePositions = referencePeakList[0].iloc[row_indexes][referencePeakList[2]]
@@ -131,7 +140,7 @@ def outputResults(matchingProbabilities: np.array,
         match_probs = matchingProbabilities.max(axis=0)
         row_indexes = matchingProbabilities.argmax(axis=0)
         column_indexes = np.arange(matchingProbabilities.shape[1])
-        csp_confidences = matching_corrected_probability[row_indexes,column_indexes]
+        csp_confidences = matching_corrected_probability[row_indexes,column_indexes,1]
         referencePeaks = referencePeakList[0].iloc[column_indexes][["Assignment"]]
         targetPeaks = targetPeakList[0].iloc[row_indexes][targetPeakList[2]]
         referencePositions = referencePeakList[0].iloc[column_indexes][referencePeakList[2]]
