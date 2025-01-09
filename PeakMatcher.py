@@ -25,9 +25,9 @@ def calculateBetaParametersFromMeanAndVariance(mean, variance):
     return torch.tensor([alpha, beta],dtype=torch.float64)
 
 def getInitialNonMatchingParameters(distances):
-    distances = distances.flatten()[distances.flatten() > 10]
-    s,loc,scale = stats.weibull_min.fit(distances,loc=0)
-    return torch.tensor([s,scale],dtype=torch.float64)
+    #distances = distances.flatten()[distances.flatten() > 10]
+    #s,loc,scale = stats.weibull_min.fit(distances,loc=0)
+    return torch.tensor([0.0005,distances.max()+0.0005],dtype=torch.float64)
 #
 def getPeakPositionsFromFile(filename, cs_cols, uncertaintycols=None, fixedError=None):
     df = pd.read_csv(filename,sep="\s+")
@@ -122,8 +122,8 @@ def EM_minimization_function(samples, dist: CSPDetectionDistribution,
 
     alpha = dist.csp_distribution.alpha
 
-    shape_reg = -1 * torch.abs(torch.relu(2.01-alpha))
-    mode_reg = -1* torch.abs(torch.relu(4.0-dist.csp_distribution.median()))
+    shape_reg = -1 * torch.abs(torch.relu(2.01-alpha))**6
+    mode_reg = -1* torch.abs(torch.relu(4.0-dist.csp_distribution.median()))**6
 
 
     loss = (-1 * logLikelihoodTerm +
@@ -213,10 +213,16 @@ def runEMStep(distances: torch.tensor,
 def parseArguments():
     parser = argparse.ArgumentParser()
     parser.add_argument('--reference_peak_list', type=str, help='reference peak list filename')
-    parser.add_argument( '--reference_cs_column_names', type=str, nargs='+', help='reference cs column names')
+    parser.add_argument( '--reference_cs_column_names', type=str, nargs='+', help='reference cs column names (e.g. [\'w1\', \'w2\']')
     parser.add_argument('--target_peak_list', type=str, help='target peak list filename')
     parser.add_argument('--target_cs_column_names', type=str, nargs='+', help='target cs column names')
-
+    parser.add_argument('--reference_peak_list_error', type=str, help='Uncertainty in each dimension for the reference peak list (e.g. \"[ 0.0015, 0.015 ]\" for a 2D HSQC [15N, 1H]')
+    parser.add_argument('--target_peak_list_error', type=str, help='Uncertainty in each dimension for the target peak list (e.g. \"[ 0.0015, 0.015 ]\" for a 2D HSQC [15N, 1H]')
+    parser.add_argument("--minimum_distance", type=float, help="Minimum normalized distance between two peaks, all normalized distances lower than this value will be set to this value",default=0.005)
+    parser.add_argument('--expected_fraction_csp', type=float, help="Estimate of the fraction of peaks expected to undergo a chemical shift perturbation", default=0.1)
+    parser.add_argument("--variance_scale_fraction_csp",type=float, help="scaling factor for variance of the prior distribution of csp distribution weight", default=2.0)
+    parser.add_argument('--expected_fraction_missing', type=float, help="Estimate of the fraction of peaks that you think will be missing between spectra", default=0.1)
+    parser.add_argument("--variance_scale_fraction_csp",type=float, help="scaling factor for variance of the prior distribution of matching distribution weight", default=2.0)
 
     return parser.parse_args()
 if __name__ == "__main__":
@@ -235,7 +241,7 @@ if __name__ == "__main__":
                                           torch.pow(target_peaks[:,:,1].unsqueeze(dim=0),2))
     )
     distances_squared_normalized = components_distances_squared_normalized.sum(dim=-1)
-    distances_squared_normalized[distances_squared_normalized == 0] = torch.finfo(torch.float64).eps
+    distances_squared_normalized[distances_squared_normalized < 0.0005] = 0.0005
     transposed = False
 
     if distances_squared_normalized.shape[0] < distances_squared_normalized.shape[1]:
@@ -255,12 +261,12 @@ if __name__ == "__main__":
     no_csp_std = 1.0-expected_no_csp_ratio
 
 
-    csp_mixture_priors = calculateBetaParametersFromMeanAndVariance(mean=expected_no_csp_ratio,variance=no_csp_std**2)  #[no csp, csp ] (Given a match!)
+    csp_mixture_priors = calculateBetaParametersFromMeanAndVariance(mean=expected_no_csp_ratio,variance=2*no_csp_std**2)  #[no csp, csp ] (Given a match!)
 
     expected_missing_ratio = 0.1
     expected_match_ratio = min(distances_squared_normalized.shape)/distances_squared_normalized.numel()
     match_std = expected_match_ratio* expected_missing_ratio
-    matching_mixture_priors = calculateBetaParametersFromMeanAndVariance(mean=expected_match_ratio,variance=match_std**2)  #[matching, nonmatching)
+    matching_mixture_priors = calculateBetaParametersFromMeanAndVariance(mean=expected_match_ratio,variance=2*match_std**2)  #[matching, nonmatching)
 
 
     # get appropriate sample size
@@ -342,7 +348,7 @@ if __name__ == "__main__":
     print("CSP Median", dist.csp_distribution.median(), "CSP Mode", dist.csp_distribution.mode())
     positionProbs = calculatePositionProb(samples,distances_squared_normalized.shape).detach()
     outputResults(positionProbs.numpy(),
-                      assignment_parameters,
+                      dist.csp_posterior_probabilities,
                       (pd.read_csv(args.reference_peak_list,sep="\s+"),int(transposed),args.reference_cs_column_names),
                       # tuple of a pandas dataframe and the dimension (0 or 1) in the representation, and a list of the resonance columns
                       (pd.read_csv(args.target_peak_list, sep="\s+"), int(not transposed), args.target_cs_column_names),
@@ -354,8 +360,8 @@ if __name__ == "__main__":
                       0.50)
 
 
-    fig = buildPlot(positionProbs.numpy(),
-                  mixture_weights.detach().numpy(),
+    fig = buildPlot(positionProbs,
+                  csp_mixture_weights.exp().detach().numpy(),
                   dist.no_csp_distribution,
                   dist.csp_distribution,
                   dist.non_matching_distribution,

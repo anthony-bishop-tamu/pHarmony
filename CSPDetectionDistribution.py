@@ -32,8 +32,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                                          scale=self._csp_distribution_parameters[1])
         self._non_matching_parameters = non_matching_parameters
        # self._non_matching_parameters =
-        self._non_matching_distribution = dist.Weibull(concentration=self._non_matching_parameters[0],
-                                                       scale=self._non_matching_parameters[1])
+        self._non_matching_distribution = dist.Uniform(non_matching_parameters[0],non_matching_parameters[1])
 
 
 

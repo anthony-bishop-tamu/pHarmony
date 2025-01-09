@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import torch
 from matplotlib import pyplot as plt
-def buildPlot(matchingProbabilities: np.array,
+def buildPlot(matchingProbabilities: torch.tensor,
               csp_mixture_weights: np.array,
               no_csp_match_distribution: torch.distributions.Distribution,
               csp_distribution: torch.distributions.Distribution,
