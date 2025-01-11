@@ -8,7 +8,6 @@ def buildPlot(matchingProbabilities: torch.tensor,
               no_csp_match_distribution: torch.distributions.Distribution,
               csp_distribution: torch.distributions.Distribution,
               non_match_distribution: torch.distributions.Distribution,
-              distributionPlot: str,
               distances: torch.tensor,
               confidence_cutoff: float = 0.90):
 
@@ -140,7 +139,7 @@ def outputResults(matchingProbabilities: np.array,
         match_probs = matchingProbabilities.max(axis=0)
         row_indexes = matchingProbabilities.argmax(axis=0)
         column_indexes = np.arange(matchingProbabilities.shape[1])
-        csp_confidences = matching_corrected_probability[row_indexes,column_indexes,1]
+        csp_confidences = state_probability[row_indexes,column_indexes,1]
         referencePeaks = referencePeakList[0].iloc[column_indexes][["Assignment"]]
         targetPeaks = targetPeakList[0].iloc[row_indexes][targetPeakList[2]]
         referencePositions = referencePeakList[0].iloc[column_indexes][referencePeakList[2]]
