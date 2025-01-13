@@ -25,7 +25,7 @@ def buildPlot(matchingProbabilities: torch.tensor,
 
         low_nonMatches = non_matches[non_matches < low_max]
 
-        bins = np.arange(0,low_max,1.0)
+        bins = np.arange(0.0005,low_max,1.0)
         ax1.hist(matches, bins=bins,color='blue',label='Matches',alpha=0.5,weights=np.ones_like(matches)/(non_matches.size()[0]+matches.size()[0]))
         ax1.hist(low_nonMatches, bins=bins,weights=np.ones_like(low_nonMatches)/(non_matches.size()[0]+matches.size()[0]),color='red',label='nonMatches',alpha=0.5)
         bins = torch.from_numpy(bins)

@@ -14,27 +14,20 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
     def __init__(self, distances: torch.tensor,
                  csp_mixture_weights: torch.tensor,
                  matching_mixture_weights: torch.tensor,
-                 csp_distribution_parameters: torch.tensor,
-                 non_matching_parameters: torch.tensor):
+                 csp_distribution: torch.distributions.Distribution,
+                 non_matching_distribution: torch.distributions.Distribution):
         super().__init__()
         assert(distances.shape[0] >= distances.shape[1])
-        assert(csp_distribution_parameters.shape == (2,)) #Gaussian parameters mean, std
         assert((2,) == csp_mixture_weights.shape)
         assert ((2,) == matching_mixture_weights.shape)
-        assert((2,) == non_matching_parameters.shape)
 
         self._distances = distances
 
         self._csp_mixture_weights = csp_mixture_weights - csp_mixture_weights.logsumexp(dim=0,keepdim=True)
         self._matching_mixture_weights = matching_mixture_weights - matching_mixture_weights.logsumexp(dim=0, keepdim=True)
-        self._csp_distribution_parameters = csp_distribution_parameters
-        self._csp_distribution = Frechet(alpha=self._csp_distribution_parameters[0],
-                                         scale=self._csp_distribution_parameters[1])
-        self._non_matching_parameters = non_matching_parameters
+        self._csp_distribution = csp_distribution
        # self._non_matching_parameters =
-        self._non_matching_distribution = dist.Uniform(non_matching_parameters[0],non_matching_parameters[1])
-
-
+        self._non_matching_distribution = non_matching_distribution
 
         self._no_csp_distribution = torch.distributions.Chi2(torch.tensor([2.0],dtype=torch.float64)) #chi2 distribution for
 
@@ -49,6 +42,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         self._event_shape = (self._distances.shape[0],)
 
         assert not self._loglikelihoodMatrix.isnan().any()
+        self._calculateDecisionLogLikelihood()
     #
 
     def _calculateDecisionLogLikelihood(self):
@@ -202,20 +196,9 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
 
         return log_prob.sum()/sample.numel()
-
-    @property
-    def csp_distribution_parameters(self) -> torch.Tensor:
-        return self._csp_distribution_parameters
-
-    @property
-    def matching_posterior_probabilities(self) -> torch.Tensor:
-        return self._matching_posterior_probabilities
     @property
     def csp_posterior_probabilities(self) -> torch.Tensor:
         return self._csp_posterior_probabilities
-    @property
-    def non_matching_distribution_parameters(self) -> torch.Tensor:
-        return self._non_matching_distribution_parameters
     @property
     def csp_distribution(self) -> torch.distributions.Distribution:
         return self._csp_distribution

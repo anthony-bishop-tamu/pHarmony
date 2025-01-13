@@ -40,24 +40,44 @@ class Frechet(torch.distributions.Distribution):
         #
 
 class KDEDensity(torch.distributions.Distribution):
+    pass
+class KDEDensity(torch.distributions.Distribution):
     def __init__(self, data: torch.tensor, eval_grid: torch.tensor, weights: torch.tensor = None):
         if weights is None:
             weights = torch.ones_like(data)
+        self._weights = weights
         npdata = data.flatten().numpy()
         npweights = weights.flatten().numpy()
-        self.data = npdata
-        self.kde = TreeKDE(bw='silverman').fit(npdata,weights=npweights)
-        self.eval_grid = eval_grid.flatten()
-        self.density = self._log_prob(self.eval_grid)
+        self._data = npdata
+        self._kde = FFTKDE(bw=1.0).fit(npdata, weights=npweights)
+        self._eval_grid = eval_grid.flatten()
+        self._density = self._log_prob(self._eval_grid)
         super(KDEDensity, self).__init__(torch.Size(), validate_args=None)
     #
     def _log_prob(self, x: torch.tensor) -> torch.tensor:
-        return torch.from_numpy(self.kde.evaluate(x.flatten().numpy())).log()
+        return torch.from_numpy(self._kde.evaluate(x.flatten().numpy())).log()
     def log_prob(self, x: torch.tensor) -> torch.Tensor:
-        range = self.eval_grid[-1] - self.eval_grid[0]
-        stepSize = range/(self.eval_grid.numel()-1)
-        idx = ((x - self.eval_grid[0])/stepSize).round().long()
-        return self.density[idx]
+        range = self._eval_grid[-1] - self._eval_grid[0]
+        stepSize = range/(self._eval_grid.numel()-1)
+        idx = ((x - self._eval_grid[0])/stepSize).round().long()
+        return self._density[idx]
+    @property
+    def eval_grid(self) -> torch.Tensor:
+        return self._eval_grid
+    @property
+    def log_density(self) -> torch.tensor:
+        return self._density
+
+    def _set_log_density(self, x: torch.tensor):
+        assert x.shape == self._density.shape
+        self._density = x
+    def weigh_by_prior(self, prior: torch.tensor) -> torch.tensor:
+        assert self.log_density.shape == prior.shape
+        new_density = self.log_density + prior
+        new_density -= new_density.logsumexp(dim=-1, keepdim=True)
+        self._set_log_density(new_density)
+
+
 
 class LogTransformedKDEDensity(KDEDensity):
     def __init__(self, data: torch.Tensor, eval_grid: torch.tensor, weights: torch.tensor=None):
@@ -67,6 +87,19 @@ class LogTransformedKDEDensity(KDEDensity):
     #
     def log_prob(self, x: torch.Tensor) -> torch.Tensor:
         return (super(LogTransformedKDEDensity, self).log_prob(x.log()).exp()/x).log()
+
+    @property
+    def eval_grid(self) -> torch.Tensor:
+        return super(LogTransformedKDEDensity, self).eval_grid.exp()
+    @property
+    def log_density(self) -> torch.tensor:
+        return (super(LogTransformedKDEDensity, self).log_density.exp()/self.eval_grid).log()
+
+    def _set_log_density(self, x: torch.tensor):
+        super(LogTransformedKDEDensity, self)._set_log_density((x.exp()*self.eval_grid).log())
+
+
+
 
 class CrystalBall(torch.distributions.Distribution):
     def __init__(self, b: torch.tensor, m: torch.tensor, loc: torch.tensor, scale: torch.tensor):
@@ -78,4 +111,3 @@ class CrystalBall(torch.distributions.Distribution):
 
     def log_prob(self, x: torch.Tensor) -> torch.Tensor:
         x = (x - self.loc) / self.scale
-        ex
