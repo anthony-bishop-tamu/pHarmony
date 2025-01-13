@@ -8,8 +8,8 @@ class Frechet(torch.distributions.Distribution):
     support = constraints.positive  # Support of the distribution (x > 0)
 
     def __init__(self, alpha, scale, loc=0, validate_args=None):
-        self.alpha = alpha  # Shape parameter (fitted_c from SciPy)
-        self.scale = scale  # Scale parameter (fitted_scale from SciPy)
+        self.alpha = alpha.detach().clone().requires_grad_(True)  # Shape parameter (fitted_c from SciPy)
+        self.scale = scale.detach().clone().requires_grad_(True)  # Scale parameter (fitted_scale from SciPy)
         self.loc = loc
         super(Frechet, self).__init__(torch.Size(), validate_args=validate_args)
 
@@ -106,7 +106,7 @@ class KDEDensity(DiscreteDistribution):
         npdata = data.flatten().numpy()
         npweights = weights.flatten().numpy()
         self._data = npdata
-        self._kde = FFTKDE(bw='silverman').fit(npdata, weights=npweights)
+        self._kde = FFTKDE(bw=1.0).fit(npdata, weights=npweights)
         self._eval_grid = eval_grid.flatten()
         super(KDEDensity, self).__init__(self._log_prob(self.eval_grid), self.eval_grid.flatten())
     #

@@ -46,15 +46,12 @@ def initalizeAllComponents(distances,true_non_matching):
     csp_weights = initial_weights[:,:,1]
     no_matching_weights = initial_weights[:,:,2]
     m  = max(distances.max().item(),true_non_matching.max().item())
-    eval_grid = torch.from_numpy(np.linspace(np.log(0.0005),np.log(m)+0.0005,100)).exp().type(torch.float64)#hyperparameter
+    eval_grid = torch.from_numpy(np.linspace(np.log(0.0005),np.log(m)+0.0005,300)).exp().type(torch.float64)#hyperparameter
 
-    csp_distribution = LogTransformedKDEDensity(distances.flatten(),eval_grid,csp_weights.flatten())
-    csp_distribution = csp_distribution.applyPrior(Frechet(alpha=torch.tensor([0.5]), scale=torch.tensor([10])))
-    non_matching_prior = torch.zeros((distances.shape[0],eval_grid.shape[0]),dtype=torch.float64)
+    csp_distribution = Frechet(alpha=torch.tensor([2.0],dtype=torch.float64), scale=torch.tensor([10.0],dtype=torch.float64),)
     non_matching_pdf = torch.zeros((distances.shape[0],eval_grid.shape[0]),dtype=torch.float64)
     for i in range(distances.shape[0]):
-        non_matching_prior[i,:] = LogTransformedKDEDensity(true_non_matching[i,:].flatten(),eval_grid).log_density
-        non_matching_pdf[i,:] = LogTransformedKDEDensity(distances[i,:].flatten(),eval_grid).log_density
+        non_matching_pdf[i,:] = LogTransformedKDEDensity(true_non_matching[i,:].flatten(),eval_grid).log_density
 
     '''fig, ax = plt.subplots()
        hist = ax.hist(distances.flatten().numpy(),bins=eval_grid.numpy(),density=True)
@@ -72,14 +69,13 @@ def initalizeAllComponents(distances,true_non_matching):
       # ax.plot(eval_grid.numpy(),no_matching_distribution.log_prob(eval_grid).exp().numpy())'''
 
     # fig.show()
-    non_matching_prior= LogDiscreteDistribution(non_matching_prior,eval_grid)
-    non_matching_distribution = LogDiscreteDistribution(non_matching_pdf,eval_grid)
-    non_matching_distribution_with_prior = non_matching_distribution.applyPrior(non_matching_prior)
+    non_matching_distribution= LogDiscreteDistribution(non_matching_pdf,eval_grid)
+
     csp_conditional_mixture_weights = (initial_weights[:,:,:2].sum(dim=(0,1))/initial_weights[:,:,0:2].sum()).log()
     matching_mixture_weights = torch.stack(((initial_weights[:,:,0:2]).sum(), (1.0-initial_weights[:,:,0:2]).sum()),dim=0)
     matching_mixture_weights /= matching_mixture_weights.sum()
 
-    return csp_distribution, non_matching_distribution_with_prior, csp_conditional_mixture_weights, matching_mixture_weights
+    return csp_distribution, non_matching_distribution, csp_conditional_mixture_weights, matching_mixture_weights
 #
 def getPeakPositionsFromFile(filename, cs_cols, uncertaintycols=None, fixedError=None):
     df = pd.read_csv(filename,sep="\s+")
@@ -209,6 +205,42 @@ def maximization(samples: tuple,
     return loss.item()
 
 #
+def maximization(samples: tuple,
+                 distances: torch.tensor,
+                 csp_mixture_weights: torch.tensor,
+                 matching_mixture_weights: torch.tensor,
+                 csp_mixture_priors: torch.tensor,
+                 matching_mixture_priors: torch.tensor,
+                 csp_distribution,
+                 optimization_list: list,
+                 no_match_distribution,
+                 learning_rate: float):
+
+
+    #optimizer = torch.optim.Adam([csp_assignment_params, csp_distribution_params], lr=1E-3)
+    optimizer = torch.optim.Adam(optimization_list, lr=learning_rate)
+    maxIterators = 10000
+    prevLoss = torch.finfo(torch.float64).max
+    for i in range(maxIterators):
+        optimizer.zero_grad()
+        dist = CSPDetectionDistribution(distances, csp_mixture_weights, matching_mixture_weights, csp_distribution,
+                                        no_match_distribution)
+        loss = EM_minimization_function(samples, dist,csp_mixture_weights,matching_mixture_weights,csp_mixture_priors,matching_mixture_priors)
+        loss.backward()
+        optimizer.step()
+        print("Loss: ", loss.item(), prevLoss-loss.item(), csp_distribution.alpha.grad, csp_distribution.scale.grad)
+        if prevLoss < loss.item():
+            optimizer = torch.optim.Adam(optimization_list, lr=optimizer.param_groups[0]['lr']*0.5)
+        elif prevLoss - loss.item() < 1e-7 and (torch.abs(torch.tensor([csp_distribution.alpha.grad,csp_distribution.scale.grad])) < 1E-5).all():
+            break
+        elif (torch.abs(torch.tensor([csp_distribution.alpha.grad,csp_distribution.scale.grad])) < 1E-2).all():
+            optimizer = torch.optim.Adam(optimization_list, lr=optimizer.param_groups[0]['lr'] * 1.1)
+
+        #
+
+        prevLoss = loss.item()
+
+    return loss.item()
 def runEMStep(distances: torch.tensor,
               csp_mixture_weights: torch.tensor,
               matching_mixture_weights: torch.tensor,
@@ -233,14 +265,16 @@ def runEMStep(distances: torch.tensor,
         # Calculate new mixture weights
         csp_mixture_weights, matching_mixture_weights = calculateMixtureWeights(dist.csp_posterior_probabilities,positionProbs,csp_mixture_priors,matching_mixture_priors)
         #maximization step
-        new_csp_distribution = LogTransformedKDEDensity(distances.flatten(),csp_distribution.eval_grid,(dist.csp_posterior_probabilities[:,:,1].exp()*positionProbs).flatten())
-        new_csp_distribution  = new_csp_distribution.applyPrior(csp_distribution.prior)
-        non_matching_pdf = torch.zeros((distances.shape[0],non_matching_distribution.eval_grid.shape[0]),dtype=torch.float64)
-        for i in range(distances.shape[0]):
-            non_matching_pdf[i, :] = LogTransformedKDEDensity(distances[i, :].flatten(), non_matching_distribution.eval_grid).log_density
-        #
-        new_non_matching_distribution = LogDiscreteDistribution(non_matching_pdf,non_matching_distribution.eval_grid)
-        new_non_matching_distribution = new_non_matching_distribution.applyPrior(non_matching_distribution.prior)
+        maximization(samples,distances,
+                     csp_mixture_weights.log(),
+                     matching_mixture_weights.log(),
+                     csp_mixture_priors,
+                     matching_mixture_priors,
+                     csp_distribution,
+                     [csp_distribution.alpha,csp_distribution.scale],
+                     non_matching_distribution,
+                     learning_rate)
+        new_non_matching_distribution = non_matching_distribution
         dist = CSPDetectionDistribution(distances,
                                         csp_mixture_weights.log(),
                                         matching_mixture_weights.log(),
@@ -253,14 +287,19 @@ def runEMStep(distances: torch.tensor,
             fig = buildPlot(positionProbs,
                         csp_mixture_weights.detach().numpy(),
                         dist.no_csp_distribution,
-                        new_csp_distribution,
+                        csp_distribution,
                         new_non_matching_distribution,
                         distances_squared_normalized,
                         0.50)
+<<<<<<< HEAD
         
             fig.show()
         #
         return samples, csp_mixture_weights.log(), matching_mixture_weights.log(), new_csp_distribution, new_non_matching_distribution
+=======
+        fig.show()
+        return samples, csp_mixture_weights.log(), matching_mixture_weights.log(), csp_distribution, new_non_matching_distribution
+>>>>>>> bf00065 (Removed non parametric behavior for fitting CSPs, non matching distribution is based on individual distributions using the distances between peaks in the reference spectrum as the estimates for the pdf)
 #
 def parseArguments():
     parser = argparse.ArgumentParser()
