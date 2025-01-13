@@ -8,7 +8,7 @@ import argparse
 from CSPDetectionDistribution import CSPDetectionDistribution
 from matplotlib import pyplot as plt
 from OutputHandling import buildPlot, outputResults
-from Frechet import KDEDensity, LogTransformedKDEDensity
+from Frechet import KDEDensity, LogTransformedKDEDensity,FrechetKDEDensity, LogDiscreteDistribution
 from pathlib import Path
 class SampleSizeToLargeError(Exception):
     pass
@@ -23,7 +23,7 @@ def calculateBetaParametersFromMeanAndVariance(mean, variance):
     beta = (1-mean)*mu
 
     return torch.tensor([alpha, beta],dtype=torch.float64)
-def initalizeAllComponents(distances):
+def initalizeAllComponents(distances,true_non_matching):
     csp_conditional_assignments = torch.ones_like(distances)*0.1
     csp_conditional_assignments[distances < 5] = 0.9
     csp_conditional_assignments = torch.stack((csp_conditional_assignments,1.0-csp_conditional_assignments),dim=2).log()
@@ -45,27 +45,41 @@ def initalizeAllComponents(distances):
     no_csp_weights = initial_weights[:,:,0]
     csp_weights = initial_weights[:,:,1]
     no_matching_weights = initial_weights[:,:,2]
-
-    eval_grid = torch.from_numpy(np.linspace(np.log(0.0005),np.log(max(distances.flatten().numpy()))+0.0005,100)).exp()#hyperparameter
+    m  = max(distances.max().item(),true_non_matching.max().item())
+    eval_grid = torch.from_numpy(np.linspace(np.log(0.0005),np.log(m)+0.0005,100)).exp().type(torch.float64)#hyperparameter
 
     csp_distribution = LogTransformedKDEDensity(distances.flatten(),eval_grid,csp_weights.flatten())
-    no_matching_distribution = LogTransformedKDEDensity(distances.flatten(),eval_grid,no_matching_weights.flatten())
+    csp_distribution = csp_distribution.applyPrior(Frechet(alpha=torch.tensor([0.5]), scale=torch.tensor([10])))
+    non_matching_prior = torch.zeros((distances.shape[0],eval_grid.shape[0]),dtype=torch.float64)
+    non_matching_pdf = torch.zeros((distances.shape[0],eval_grid.shape[0]),dtype=torch.float64)
+    for i in range(distances.shape[0]):
+        non_matching_prior[i,:] = LogTransformedKDEDensity(true_non_matching[i,:].flatten(),eval_grid).log_density
+        non_matching_pdf[i,:] = LogTransformedKDEDensity(distances[i,:].flatten(),eval_grid).log_density
 
-    fig, ax = plt.subplots()
-    hist = ax.hist(distances.flatten().numpy(),bins=eval_grid.numpy(),density=True)
-    ax.set_xscale('log')
-    ax.set_yscale('log')
-    ax.plot(eval_grid.numpy(),no_matching_distribution.log_prob(eval_grid).exp().numpy())
-   # no_matching_distribution.weigh_by_prior(torch.ones_like(eval_grid)/distances.max())
-   # ax.plot(eval_grid.numpy(),no_matching_distribution.log_prob(eval_grid).exp().numpy())
+    '''fig, ax = plt.subplots()
+       hist = ax.hist(distances.flatten().numpy(),bins=eval_grid.numpy(),density=True)
+       hist = ax.hist(true_non_matching.flatten().numpy(),bins=eval_grid.numpy(),density=True)
+       ax.set_xscale('log')
+       ax.set_yscale('log')
+       #ax.plot(eval_grid.numpy(),no_matching_distribution.log_prob(eval_grid).exp().numpy())
+       ax.plot(eval_grid.numpy(),true_non_matching_distribution.log_prob(eval_grid).exp().numpy(),color='green')
+       no_match_prior = true_non_matching_distribution.log_prob(eval_grid)
+       no_matching_distribution.weigh_by_prior(no_match_prior)
+       ax.plot(eval_grid.numpy(),no_matching_distribution.log_prob(eval_grid).exp().numpy(),color='red')
+       csp_prior = torch.zeros_like(eval_grid)
+       csp_prior[eval_grid < 1000] = 1.0/1000
+       csp_distribution.weigh_by_prior(csp_prior)
+      # ax.plot(eval_grid.numpy(),no_matching_distribution.log_prob(eval_grid).exp().numpy())'''
 
-    fig.show()
-
+    # fig.show()
+    non_matching_prior= LogDiscreteDistribution(non_matching_prior,eval_grid)
+    non_matching_distribution = LogDiscreteDistribution(non_matching_pdf,eval_grid)
+    non_matching_distribution_with_prior = non_matching_distribution.applyPrior(non_matching_prior)
     csp_conditional_mixture_weights = (initial_weights[:,:,:2].sum(dim=(0,1))/initial_weights[:,:,0:2].sum()).log()
     matching_mixture_weights = torch.stack(((initial_weights[:,:,0:2]).sum(), (1.0-initial_weights[:,:,0:2]).sum()),dim=0)
     matching_mixture_weights /= matching_mixture_weights.sum()
 
-    return csp_distribution, no_matching_distribution, csp_conditional_mixture_weights, matching_mixture_weights
+    return csp_distribution, non_matching_distribution_with_prior, csp_conditional_mixture_weights, matching_mixture_weights
 #
 def getPeakPositionsFromFile(filename, cs_cols, uncertaintycols=None, fixedError=None):
     df = pd.read_csv(filename,sep="\s+")
@@ -220,8 +234,13 @@ def runEMStep(distances: torch.tensor,
         csp_mixture_weights, matching_mixture_weights = calculateMixtureWeights(dist.csp_posterior_probabilities,positionProbs,csp_mixture_priors,matching_mixture_priors)
         #maximization step
         new_csp_distribution = LogTransformedKDEDensity(distances.flatten(),csp_distribution.eval_grid,(dist.csp_posterior_probabilities[:,:,1].exp()*positionProbs).flatten())
-        new_non_matching_distribution = non_matching_distribution
-
+        new_csp_distribution  = new_csp_distribution.applyPrior(csp_distribution.prior)
+        non_matching_pdf = torch.zeros((distances.shape[0],non_matching_distribution.eval_grid.shape[0]),dtype=torch.float64)
+        for i in range(distances.shape[0]):
+            non_matching_pdf[i, :] = LogTransformedKDEDensity(distances[i, :].flatten(), non_matching_distribution.eval_grid).log_density
+        #
+        new_non_matching_distribution = LogDiscreteDistribution(non_matching_pdf,non_matching_distribution.eval_grid)
+        new_non_matching_distribution = new_non_matching_distribution.applyPrior(non_matching_distribution.prior)
         dist = CSPDetectionDistribution(distances,
                                         csp_mixture_weights.log(),
                                         matching_mixture_weights.log(),
@@ -236,7 +255,6 @@ def runEMStep(distances: torch.tensor,
                         dist.no_csp_distribution,
                         new_csp_distribution,
                         new_non_matching_distribution,
-                        "fittedDistributions.png",
                         distances_squared_normalized,
                         0.50)
         
@@ -261,37 +279,53 @@ def parseArguments():
     parser.add_argument( "--display_distributions", action='store_true', help="Display the distributions plots", )
 
     return parser.parse_args()
+
+def getDistancesSquaredNormalized(peaklist: str, column_names:list, error:list,
+                        peaklist2: str, column_names2: list, error2:list) -> torch.Tensor:
+    reference_peaks = getPeakPositionsFromFile(peaklist,
+                                               column_names,
+                                               fixedError=error)
+    target_peaks = getPeakPositionsFromFile(peaklist2,
+                                            column_names2,
+                                            fixedError=error2)
+
+    components_distances_squared = torch.pow(
+        reference_peaks[:, :, 0].unsqueeze(dim=-2) - target_peaks[:, :, 0].unsqueeze(dim=0), 2)
+    components_distances_squared_normalized = (
+            components_distances_squared / (torch.pow(reference_peaks[:, :, 1].unsqueeze(dim=-2), 2) +
+                                            torch.pow(target_peaks[:, :, 1].unsqueeze(dim=0), 2))
+    )
+    distances_squared_normalized = components_distances_squared_normalized.sum(dim=-1)
+    distances_squared_normalized[distances_squared_normalized == 0] = torch.finfo(torch.float64).eps
+
+    return distances_squared_normalized
+
 if __name__ == "__main__":
     #torch.manual_seed(42)
     args = parseArguments()
+    distances_squared_normalized = getDistancesSquaredNormalized(args.reference_peak_list,
+                                                                 args.reference_cs_column_names,
+                                                                 [0.015,0.0015],
+                                                                 args.target_peak_list,
+                                                                 args.target_cs_column_names,
+                                                                  [0.015,0.0015])
+    non_matching_distances_self = getDistancesSquaredNormalized(args.reference_peak_list,
+                                                                 args.reference_cs_column_names,
+                                                                 [0.015,0.0015],
+                                                                 args.reference_peak_list,
+                                                                 args.reference_cs_column_names,
+                                                                  [0.015,0.0015])
 
-    display_distributions = args.display_distributions
+    non_matching_distances_self = non_matching_distances_self[~torch.eye(distances_squared_normalized.shape[0], dtype=torch.bool)].reshape((distances_squared_normalized.shape[0],distances_squared_normalized.shape[0]-1))
 
-    output_directory = args.output_directory
-    output_directory.mkdir(parents=True,exist_ok=True)
-
-    reference_peaks = getPeakPositionsFromFile(args.reference_peak_list,
-                                               args.reference_cs_column_names,
-                                               fixedError=args.reference_peak_list_error)
-    target_peaks = getPeakPositionsFromFile(args.target_peak_list,
-                                            args.target_cs_column_names,
-                                            fixedError=args.target_peak_list_error)
-
-    components_distances_squared = torch.pow(reference_peaks[:,:,0].unsqueeze(dim=-2) - target_peaks[:,:,0].unsqueeze(dim=0),2)
-    components_distances_squared_normalized = (
-            components_distances_squared/(torch.pow(reference_peaks[:,:,1].unsqueeze(dim=-2),2) +
-                                          torch.pow(target_peaks[:,:,1].unsqueeze(dim=0),2))
-    )
-    distances_squared_normalized = components_distances_squared_normalized.sum(dim=-1)
-    distances_squared_normalized[distances_squared_normalized < args.minimum_distance] = args.minimum_distance
     transposed = False
 
-    if distances_squared_normalized.shape[0] < distances_squared_normalized.shape[1]:
-        distances_squared_normalized = distances_squared_normalized.transpose(0,1)
-        transposed = True
+    #if distances_squared_normalized.shape[0] < distances_squared_normalized.shape[1]:
+    #    distances_squared_normalized = distances_squared_normalized.transpose(0,1)
+    #    transposed = True
     #
     #Get intial KDEs
-    initial_csp_distribution, initial_non_matching_distribution, initial_csp_mixture_weights, initial_matching_mixture_weights = initalizeAllComponents(distances_squared_normalized)
+    initial_csp_distribution, initial_non_matching_distribution, initial_csp_mixture_weights, initial_matching_mixture_weights = initalizeAllComponents(distances_squared_normalized,non_matching_distances_self)
 
     expected_no_csp_ratio = 1.0 - args.expected_fraction_csp
     no_csp_std = args.expected_fraction_csp #Std deviation is arbitrarily set to being the same as the expected fraction csp
@@ -303,7 +337,7 @@ if __name__ == "__main__":
     match_std = expected_match_ratio*expected_missing_ratio
     matching_mixture_priors = calculateBetaParametersFromMeanAndVariance(mean=expected_match_ratio,variance=args.variance_scale_fraction_missing*match_std**2)  #[matching, nonmatching)
 
-    initial_non_matching_distribution = torch.distributions.Uniform(0.0005,distances_squared_normalized.max()+0.0005)
+    #initial_non_matching_distribution = torch.distributions.Uniform(0.0005,distances_squared_normalized.max()+0.0005)
 
     # get appropriate sample size
     sampleSize = distances_squared_normalized.shape[0]
@@ -318,7 +352,7 @@ if __name__ == "__main__":
                                         initial_non_matching_distribution)
         samples = dist.sample((sampleSize,))
         converged = validateSufficentSampling(samples, distances_squared_normalized.shape)
-        positionProb = calculatePositionProb(samples, distances_squared_normalized.shape)
+        positionProbs = calculatePositionProb(samples, distances_squared_normalized.shape)
 
         if not converged:
             sampleSize *= 2
@@ -339,7 +373,7 @@ if __name__ == "__main__":
     non_matching_distribution = initial_non_matching_distribution
     for i in range(maxEMSteps):
         previous_dist = dist
-        previous_matching_probs = positionProb
+        previous_matching_probs = positionProbs
 
         samples, csp_mixture_weights, matching_mixture_weights,csp_distribution, non_matching_distribution = runEMStep(
                   distances_squared_normalized,
