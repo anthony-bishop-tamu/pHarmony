@@ -87,8 +87,9 @@ def outputResults(matchingProbabilities: np.array,
                                 state_probability: np.array,
                                 referencePeakList: tuple, #tuple of a pandas dataframe and the dimension (0 or 1) in the representation, and a list of the resonance columns
                                 targetPeakList: tuple, #tuple of a pandas dataframe and the dimension (0 or 1) in the representation
-                                transferedPeaklist: str,
-                                highConfidenceTransferredPeakList: str,
+                                transferedPeaks: str,
+                                highConfidenceTransferedPeaks: str,
+                                highConfidenceTransferedPeakList: str,
                                 probabilityTable: str,
                                 chemicalShiftProbabilityTable: str,
                                 confidenceCutoff: float = 0.90):
@@ -115,42 +116,40 @@ def outputResults(matchingProbabilities: np.array,
     probability_df = pd.DataFrame(matchingProbabilities)
     probability_df.columns = column_labels
     probability_df.index = row_labels
-    probability_df.to_csv(probabilityTable)
+    probability_df.to_csv(probabilityTable,index=False)
 
     #output csp_probability matches
     csp_corrected_probability_df = pd.DataFrame(state_probability[:,:,1])
     csp_corrected_probability_df.columns = column_labels
     csp_corrected_probability_df.index = row_labels
-    csp_corrected_probability_df.to_csv(chemicalShiftProbabilityTable)
+    csp_corrected_probability_df.to_csv(chemicalShiftProbabilityTable,index=False)
 
     #build transferred peak lists
-    if rowIsReference:
-        match_probs = matchingProbabilities.max(axis=1)
-        column_indexes = matchingProbabilities.argmax(axis=1)
-        row_indexes = np.arange(matchingProbabilities.shape[0])
-        csp_confidences = state_probability[row_indexes,column_indexes,1]
-        referencePeaks = referencePeakList[0].iloc[row_indexes][["Assignment"]]
-        targetPeaks = targetPeakList[0].iloc[column_indexes][targetPeakList[2]]
-        referencePositions = referencePeakList[0].iloc[row_indexes][referencePeakList[2]]
-        match_probs = pd.DataFrame(match_probs, columns=["MatchingProbability"])
-        csp_probs = pd.DataFrame(csp_confidences, columns=["CSPProbability"])
 
-    else:
-        match_probs = matchingProbabilities.max(axis=0)
-        row_indexes = matchingProbabilities.argmax(axis=0)
-        column_indexes = np.arange(matchingProbabilities.shape[1])
-        csp_confidences = state_probability[row_indexes,column_indexes,1]
-        referencePeaks = referencePeakList[0].iloc[column_indexes][["Assignment"]]
-        targetPeaks = targetPeakList[0].iloc[row_indexes][targetPeakList[2]]
-        referencePositions = referencePeakList[0].iloc[column_indexes][referencePeakList[2]]
-        match_probs = pd.DataFrame(match_probs, columns=["MatchingProbability"])
-        csp_probs = pd.DataFrame(csp_confidences, columns=["CSPProbability"])
+    match_probs = matchingProbabilities.max(axis=1)
+    column_indexes = matchingProbabilities.argmax(axis=1)
+    row_indexes = np.arange(matchingProbabilities.shape[0])
+    csp_confidences = state_probability[row_indexes,column_indexes,1]
+    referencePeaks = referencePeakList[0].iloc[row_indexes][["Assignment"]]
+    targetPeaks = targetPeakList[0].iloc[column_indexes][["Assignment"]]
+    targetPositions = targetPeakList[0].iloc[column_indexes][targetPeakList[2]]
+    referencePositions = referencePeakList[0].iloc[row_indexes][referencePeakList[2]]
+    match_probs = pd.DataFrame(match_probs, columns=["MatchingProbability"])
+    csp_probs = pd.DataFrame(csp_confidences, columns=["CSPProbability"])
 
-    transfer_df = pd.concat([referencePeaks.reset_index(drop=True), targetPeaks.reset_index(drop=True), referencePositions, match_probs,csp_probs], axis=1)
-    transfer_df.columns = ([ "Assignment"]+[label for label in targetPeakList[2] ] +
-                               ["ref_"+label for label in referencePeakList[2]] + [ "MatchingProbability", "CSPProbability"])
-    transfer_df.to_csv(transferedPeaklist)
-    transfer_df[transfer_df['MatchingProbability'] > confidenceCutoff].to_csv(highConfidenceTransferredPeakList)
+    transfer_df = pd.concat([referencePeaks.reset_index(drop=True), referencePositions,
+                             targetPeaks.reset_index(drop=True), targetPositions.reset_index(drop=True) ,
+                             match_probs,csp_probs], axis=1)
+    transfer_df.columns = ([ "Assignment_ref"]+["ref_"+label for label in referencePeakList[2]]+
+                           ["Assignment_target"]+[label for label in targetPeakList[2] ] +
+                               [ "MatchingProbability", "CSPProbability"])
+    transfer_df.to_csv(transferedPeaks,index=False)
+    transfer_df[transfer_df['MatchingProbability'] > confidenceCutoff].to_csv(highConfidenceTransferedPeaks,index=False)
+
+    transfer_df[transfer_df['MatchingProbability'] > confidenceCutoff][
+        ["Assignment_ref"]+[label for label in targetPeakList[2]]
+        ].to_csv(highConfidenceTransferedPeakList,index=False,sep='\t')
+
 
 #
 

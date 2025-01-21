@@ -8,7 +8,7 @@ import argparse
 from CSPDetectionDistribution import CSPDetectionDistribution
 from matplotlib import pyplot as plt
 from OutputHandling import buildPlot, outputResults
-from Frechet import KDEDensity, LogTransformedKDEDensity,FrechetKDEDensity, LogDiscreteDistribution
+from Frechet import KDEDensity, LogTransformedKDEDensity,Frechet, LogDiscreteDistribution
 from pathlib import Path
 class SampleSizeToLargeError(Exception):
     pass
@@ -80,6 +80,8 @@ def initalizeAllComponents(distances,true_non_matching):
 def getPeakPositionsFromFile(filename, cs_cols, uncertaintycols=None, fixedError=None):
     df = pd.read_csv(filename,sep="\s+")
     positions = df[cs_cols].to_numpy(dtype=np.float64)
+    if positions.shape[0] == 0:
+        raise RuntimeError(f"No peaks detected in File: {filename}")
     if uncertaintycols is not None:
         uncertainties = df[uncertaintycols].to_numpy(dtype=np.float64)
     elif fixedError is not None:
@@ -160,11 +162,17 @@ def EM_minimization_function(samples, dist: CSPDetectionDistribution,
 
     logLikelihoodTerm = dist.log_prob(samples).sum()#/(samples.numel()*dist._distances.numel())
 
-    positionProb = calculatePositionProb(samples, dist._distances.shape)
+    #positionProb = calculatePositionProb(samples, dist._distances.shape)
+
+    scale_regularization = torch.relu((1.0 - dist.csp_distribution.scale)*10)**6
+    alpha_regularization = torch.relu((0.1 - dist.csp_distribution.alpha)*10)**6
+    median_regularization = torch.relu((5 - dist.csp_distribution.median())*10)**6
+    quantile_regularization = torch.relu((1 - dist.csp_distribution.quantile(torch.tensor([0.05])))*10)**6
 
     loss = (-1 * logLikelihoodTerm +
             -1*((csp_mixture_priors-1.0)*csp_mixture_weights).sum()+
-            -1*((matching_mixture_priors-1.0)*matching_mixture_weights).sum()) + mode_reg
+            -1*((matching_mixture_priors-1.0)*matching_mixture_weights).sum() +
+            scale_regularization + alpha_regularization + median_regularization + quantile_regularization)
     assert loss.isfinite().all()
     return loss
 def maximization(samples: tuple,
@@ -214,13 +222,16 @@ def maximization(samples: tuple,
                  csp_distribution,
                  optimization_list: list,
                  no_match_distribution,
-                 learning_rate: float):
+                 learning_rate: float,
+                 gradient_convergence: float):
 
 
     #optimizer = torch.optim.Adam([csp_assignment_params, csp_distribution_params], lr=1E-3)
     optimizer = torch.optim.Adam(optimization_list, lr=learning_rate)
     maxIterators = 10000
     prevLoss = torch.finfo(torch.float64).max
+    previous_alpha = csp_distribution.alpha.detach().clone()
+    previous_scale = csp_distribution.scale.detach().clone()
     for i in range(maxIterators):
         optimizer.zero_grad()
         dist = CSPDetectionDistribution(distances, csp_mixture_weights, matching_mixture_weights, csp_distribution,
@@ -228,10 +239,17 @@ def maximization(samples: tuple,
         loss = EM_minimization_function(samples, dist,csp_mixture_weights,matching_mixture_weights,csp_mixture_priors,matching_mixture_priors)
         loss.backward()
         optimizer.step()
-        print("Loss: ", loss.item(), prevLoss-loss.item(), csp_distribution.alpha.grad, csp_distribution.scale.grad)
-        if prevLoss < loss.item():
+        print("Loss: ", loss.item(), prevLoss-loss.item(), csp_distribution.alpha.grad, csp_distribution.scale.grad, optimizer.param_groups[0]['lr'])
+        if not torch.tensor([csp_distribution.alpha,csp_distribution.scale,csp_distribution.alpha.grad,csp_distribution.scale.grad]).isfinite().all():
+            with torch.no_grad():
+                csp_distribution.alpha[0] = previous_alpha[0]
+                csp_distribution.scale[0] = previous_scale[0]
+            optimizer = torch.optim.Adam(optimization_list, lr=optimizer.param_groups[0]['lr'] * 0.5)
+            print("Lowering Learning rate")
+            continue
+        elif prevLoss < loss.item():
             optimizer = torch.optim.Adam(optimization_list, lr=optimizer.param_groups[0]['lr']*0.5)
-        elif prevLoss - loss.item() < 1e-7 and (torch.abs(torch.tensor([csp_distribution.alpha.grad,csp_distribution.scale.grad])) < 1E-5).all():
+        elif prevLoss - loss.item() < 1e-7 and (torch.abs(torch.tensor([csp_distribution.alpha.grad,csp_distribution.scale.grad])) < gradient_convergence).all():
             break
         elif (torch.abs(torch.tensor([csp_distribution.alpha.grad,csp_distribution.scale.grad])) < 1E-2).all():
             optimizer = torch.optim.Adam(optimization_list, lr=optimizer.param_groups[0]['lr'] * 1.1)
@@ -239,6 +257,8 @@ def maximization(samples: tuple,
         #
 
         prevLoss = loss.item()
+        previous_alpha[0] = csp_distribution.alpha[0]
+        previous_scale[0] = csp_distribution.scale[0]
 
     return loss.item()
 def runEMStep(distances: torch.tensor,
@@ -250,8 +270,8 @@ def runEMStep(distances: torch.tensor,
               non_matching_distribution: torch.distributions.Distribution,
               sampleSize: int,
               learning_rate: float,
-              output_directory: Path,
-              display_distributions: bool = True):
+              gradient_convergence: float,
+              display_distributions: bool = False):
 
 
         dist = CSPDetectionDistribution(distances,
@@ -273,7 +293,8 @@ def runEMStep(distances: torch.tensor,
                      csp_distribution,
                      [csp_distribution.alpha,csp_distribution.scale],
                      non_matching_distribution,
-                     learning_rate)
+                     learning_rate,
+                     gradient_convergence)
         new_non_matching_distribution = non_matching_distribution
         dist = CSPDetectionDistribution(distances,
                                         csp_mixture_weights.log(),
@@ -291,21 +312,16 @@ def runEMStep(distances: torch.tensor,
                         new_non_matching_distribution,
                         distances_squared_normalized,
                         0.50)
-<<<<<<< HEAD
         
             fig.show()
         #
-        return samples, csp_mixture_weights.log(), matching_mixture_weights.log(), new_csp_distribution, new_non_matching_distribution
-=======
-        fig.show()
         return samples, csp_mixture_weights.log(), matching_mixture_weights.log(), csp_distribution, new_non_matching_distribution
->>>>>>> bf00065 (Removed non parametric behavior for fitting CSPs, non matching distribution is based on individual distributions using the distances between peaks in the reference spectrum as the estimates for the pdf)
 #
 def parseArguments():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--reference_peak_list', required=True, type=str, help='reference peak list filename')
+    parser.add_argument('--reference_peak_list', required=True, type=Path, help='reference peak list filename')
     parser.add_argument( '--reference_cs_column_names', required=True, type=str, nargs='+', help='reference cs column names (e.g. \'w1\', \'w2\')')
-    parser.add_argument('--target_peak_list', required=True, type=str, help='target peak list filename')
+    parser.add_argument('--target_peak_list', required=True, type=Path, help='target peak list filename')
     parser.add_argument('--target_cs_column_names', required=True, type=str, nargs='+', help='target cs column names (e.g. \'w1\', \'w2\')')
     parser.add_argument('--reference_peak_list_error', required=True, type=float, nargs='+', help='Uncertainty in each dimension for the reference peak list (e.g. \" 0.0015 0.015 \" for a 2D HSQC [15N, 1H]')
     parser.add_argument('--target_peak_list_error', required=True, type=float, nargs='+', help='Uncertainty in each dimension for the target peak list (e.g. \" 0.0015, 0.015 \" for a 2D HSQC [15N, 1H]')
@@ -314,9 +330,10 @@ def parseArguments():
     parser.add_argument("--variance_scale_fraction_csp",type=float, help="scaling factor for variance of the prior distribution of csp distribution weight", default=2.0)
     parser.add_argument('--expected_fraction_missing', type=float, help="Estimate of the fraction of peaks that you think will be missing between spectra", default=0.1)
     parser.add_argument("--variance_scale_fraction_missing",type=float, help="scaling factor for variance of the prior distribution of matching distribution weight", default=2.0)
+    parser.add_argument("--gradient_convergence",type=float, help="Gradient convergence criterion", default=1E-5)
     parser.add_argument("--output_directory",type=Path,help="Directory path to output the results to", default="./peak_matcher_output")
     parser.add_argument( "--display_distributions", action='store_true', help="Display the distributions plots", )
-
+    parser.add_argument( "--confidence_cutoff", type=lambda x: float(x) if 0.0 <= float(x) <= 1.0 else argparse.ArgumentTypeError("Value must be between 0.0 and 1.0."), help="Minimum posterior probability for outputing match", default=0.90)
     return parser.parse_args()
 
 def getDistancesSquaredNormalized(peaklist: str, column_names:list, error:list,
@@ -342,23 +359,25 @@ def getDistancesSquaredNormalized(peaklist: str, column_names:list, error:list,
 if __name__ == "__main__":
     #torch.manual_seed(42)
     args = parseArguments()
+    output_directory = args.output_directory
+    output_directory.mkdir(exist_ok=True, parents=True)
+    display_distributions = args.display_distributions
     distances_squared_normalized = getDistancesSquaredNormalized(args.reference_peak_list,
                                                                  args.reference_cs_column_names,
-                                                                 [0.015,0.0015],
+                                                                 args.reference_peak_list_error,
                                                                  args.target_peak_list,
                                                                  args.target_cs_column_names,
-                                                                  [0.015,0.0015])
+                                                                  args.target_peak_list_error)
     non_matching_distances_self = getDistancesSquaredNormalized(args.reference_peak_list,
                                                                  args.reference_cs_column_names,
-                                                                 [0.015,0.0015],
+                                                                 args.reference_peak_list_error,
                                                                  args.reference_peak_list,
                                                                  args.reference_cs_column_names,
-                                                                  [0.015,0.0015])
+                                                                  args.target_peak_list_error)
 
     non_matching_distances_self = non_matching_distances_self[~torch.eye(distances_squared_normalized.shape[0], dtype=torch.bool)].reshape((distances_squared_normalized.shape[0],distances_squared_normalized.shape[0]-1))
 
     transposed = False
-
     #if distances_squared_normalized.shape[0] < distances_squared_normalized.shape[1]:
     #    distances_squared_normalized = distances_squared_normalized.transpose(0,1)
     #    transposed = True
@@ -423,7 +442,8 @@ if __name__ == "__main__":
                   csp_distribution,
                   non_matching_distribution,
                   sampleSize,
-                  learning_rate)
+                  learning_rate,
+                  args.gradient_convergence)
         dist = CSPDetectionDistribution(distances_squared_normalized, csp_mixture_weights, matching_mixture_weights,
                                         csp_distribution,
                                         non_matching_distribution)
@@ -448,20 +468,21 @@ if __name__ == "__main__":
             #
         #
     #
+    name_stem = f"{args.reference_peak_list.name}_{args.target_peak_list.name}"
     outputResults(positionProbs.numpy(),
                       dist.csp_posterior_probabilities.exp(),
                       (pd.read_csv(args.reference_peak_list,sep="\s+"),int(transposed),args.reference_cs_column_names),
                       # tuple of a pandas dataframe and the dimension (0 or 1) in the representation, and a list of the resonance columns
                       (pd.read_csv(args.target_peak_list, sep="\s+"), int(not transposed), args.target_cs_column_names),
                       # tuple of a pandas dataframe and the dimension (0 or 1) in the representation
-                      output_directory/"Ref2Target_transferred.list",
-                      output_directory/"Ref2Target_transferred_HC.list",
+                      output_directory/f"{name_stem}_transferred.txt",
+                      output_directory/f"{name_stem}_transferred_HC.txt",
+                      output_directory/f"{name_stem}_transferred.list",
                       output_directory/"Match_probabilities.csv",
                       output_directory/"CSP_probabilities.csv",
-                      0.50)
+                      args.confidence_cutoff)
 
     print("Outputing plots")
-    print((output_directory/"fittedDistributions.png").resolve())
     fig = buildPlot(positionProbs,
                   csp_mixture_weights.exp().detach().numpy(),
                   dist.no_csp_distribution,
@@ -469,10 +490,11 @@ if __name__ == "__main__":
                   dist.non_matching_distribution,
                   distances_squared_normalized,
                   0.50)
-    fig.savefig(output_directory/"fittedDistributions.png")
+    fig.savefig(output_directory/f"{name_stem}_fittedDistributions.png")
     if display_distributions:
         fig.show()
 
+    print("Done")
 #
 
 

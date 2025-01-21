@@ -31,7 +31,9 @@ class Frechet(torch.distributions.Distribution):
     def mode(self):
         return self.scale*torch.pow(self.alpha/(1+self.alpha), 1.0/self.alpha) + self.loc
 
-    @property
+    def quantile(self, p):
+        return self.scale*torch.pow(-torch.log(p),-1.0/self.alpha) + self.loc
+
     def variance(self):
         if self.alpha < 2.0:
             return torch.tensor([torch.inf])
@@ -106,7 +108,7 @@ class KDEDensity(DiscreteDistribution):
         npdata = data.flatten().numpy()
         npweights = weights.flatten().numpy()
         self._data = npdata
-        self._kde = FFTKDE(bw=1.0).fit(npdata, weights=npweights)
+        self._kde = FFTKDE(bw='silverman').fit(npdata, weights=npweights)
         self._eval_grid = eval_grid.flatten()
         super(KDEDensity, self).__init__(self._log_prob(self.eval_grid), self.eval_grid.flatten())
     #

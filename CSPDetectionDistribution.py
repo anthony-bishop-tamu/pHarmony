@@ -17,7 +17,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                  csp_distribution: torch.distributions.Distribution,
                  non_matching_distribution: torch.distributions.Distribution):
         super().__init__()
-        assert(distances.shape[0] >= distances.shape[1])
+        #assert(distances.shape[0] >= distances.shape[1])
         assert((2,) == csp_mixture_weights.shape)
         assert ((2,) == matching_mixture_weights.shape)
 
@@ -40,8 +40,12 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                                                 self._csp_distribution.log_prob(self._distances).clamp(min=self.min_float64),
                                                 self._non_matching_distribution.log_prob(self._distances).clamp(min=self.min_float64)),dim=2)
         self._event_shape = (self._distances.shape[0],)
+        if self._loglikelihoodMatrix[:,:,1].isnan().any():
+            print(f"Error with CSP dist evaluation: parameters are alpha,scale {csp_distribution.alpha} {csp_distribution.scale}")
 
-        assert not self._loglikelihoodMatrix.isnan().any()
+        assert not self._loglikelihoodMatrix[:,:,0].isnan().any()
+        assert not self._loglikelihoodMatrix[:, :,  1].isnan().any()
+        assert not self._loglikelihoodMatrix[:, :, 2].isnan().any()
         self._calculateDecisionLogLikelihood()
     #
 
