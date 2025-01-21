@@ -1,7 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
   <component name="ChangeListManager">
-    <list default="true" id="183429c4-660f-42c0-a3f9-1658a027a504" name="Changes" comment="" />
+    <list default="true" id="183429c4-660f-42c0-a3f9-1658a027a504" name="Changes" comment="">
+      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/CSPDetectionDistribution.py" beforeDir="false" afterPath="$PROJECT_DIR$/CSPDetectionDistribution.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Frechet.py" beforeDir="false" afterPath="$PROJECT_DIR$/Frechet.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/OutputHandling.py" beforeDir="false" afterPath="$PROJECT_DIR$/OutputHandling.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/PeakMatcher.py" beforeDir="false" afterPath="$PROJECT_DIR$/PeakMatcher.py" afterDir="false" />
+    </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -10,23 +20,29 @@
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
-  <component name="ProjectColorInfo"><![CDATA[{
-  "associatedIndex": 2
-}]]></component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 2
+}</component>
   <component name="ProjectId" id="2m7Jy0cIkCquho4J40Y95r0wPxt" />
-  <component name="ProjectLevelVcsManager" settingsEditedManually="true" />
+  <component name="ProjectLevelVcsManager" settingsEditedManually="true">
+    <ConfirmationsSetting value="2" id="Add" />
+  </component>
   <component name="ProjectViewState">
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "git-widget-placeholder": "main",
-    "nodejs_package_manager_path": "npm",
-    "vue.rearranger.settings.migration": "true"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;Python.PeakMatcher.executor&quot;: &quot;Debug&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;nonparametric&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   }
-}]]></component>
+}</component>
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
@@ -43,7 +59,38 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1726421931717</updated>
+      <workItem from="1736872698568" duration="6543000" />
+      <workItem from="1736895033856" duration="1000" />
+      <workItem from="1736897188585" duration="14536000" />
+      <workItem from="1737038446473" duration="598000" />
+      <workItem from="1737258828384" duration="1591000" />
+      <workItem from="1737393331106" duration="5514000" />
     </task>
     <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+  <component name="XDebuggerManager">
+    <watches-manager>
+      <configuration name="PythonConfigurationType">
+        <watch expression="self._density.exp()/x" language="Python" />
+        <watch expression="(self._base_row_decision_likelihoods - self._base_row_decision_likelihoods.logsumexp(dim=-1,keepdim=True)).exp().detach().numpy()*(dist._base_row_decision_likelihoods - dist._base_row_decision_likelihoods.logsumexp(dim=-1,keepdim=True)).exp().detach().numpy() - ((dist._base_row_decision_likelihoods - dist._base_row_decision_likelihoods.logsumexp(dim=-1,keepdim=True)).exp().detach().numpy()+(dist._base_row_decision_likelihoods - dist._base_row_decision_likelihoods.logsumexp(dim=-1,keepdim=True)).exp().detach().numpy())" language="Python" />
+      </configuration>
+    </watches-manager>
+  </component>
+  <component name="com.intellij.coverage.CoverageDataManagerImpl">
+    <SUITE FILE_PATH="coverage/PeakMatcher$CSPDetectionDistribution.coverage" NAME="CSPDetectionDistribution Coverage Results" MODIFIED="1727883681315" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/PeakMatcher$PeakMatcherSVI.coverage" NAME="PeakMatcherSVI Coverage Results" MODIFIED="1734742507233" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="" />
+    <SUITE FILE_PATH="coverage/PeakMatcher$Frechet.coverage" NAME="Frechet Coverage Results" MODIFIED="1728499386162" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/PeakMatcher$FitChi2.coverage" NAME="FitChi2 Coverage Results" MODIFIED="1729029874123" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="" />
+    <SUITE FILE_PATH="coverage/PeakMatcher$util.coverage" NAME="util Coverage Results" MODIFIED="1728425485556" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$USER_HOME$/miniconda3/envs/PeakMatcher/lib/python3.8/site-packages/pyro" />
+    <SUITE FILE_PATH="coverage/PeakMatcher$EM_CSPDetectionDistribution.coverage" NAME="EM_CSPDetectionDistribution Coverage Results" MODIFIED="1728184553294" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/PeakMatcher$SMCMatchingDistribution.coverage" NAME="SMCMatchingDistribution Coverage Results" MODIFIED="1734736437553" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/PeakMatcher$PeakMatcher_autoPicked.coverage" NAME="PeakMatcher_autoPicked Coverage Results" MODIFIED="1736536060403" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/../../tempworkspace/ab_IL1B_Deconvolution_plate_4_111124" />
+    <SUITE FILE_PATH="coverage/PeakMatcher$testCSPDetectionDistribution.coverage" NAME="testCSPDetectionDistribution Coverage Results" MODIFIED="1727891677759" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/PeakMatcher$DistancesMM.coverage" NAME="DistancesMM Coverage Results" MODIFIED="1728512974408" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/PeakMatcher$nonMatchingCSPDistribution.coverage" NAME="nonMatchingCSPDistribution Coverage Results" MODIFIED="1734730196563" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="" />
+    <SUITE FILE_PATH="coverage/PeakMatcher$PeakMatcher.coverage" NAME="PeakMatcher Coverage Results" MODIFIED="1737400107275" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/../../tempWorkSpace/ab_IL1B_Deconvolution_plate_4_111124" />
   </component>
 </project>
