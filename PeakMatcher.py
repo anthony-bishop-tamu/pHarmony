@@ -181,44 +181,6 @@ def maximization(samples: tuple,
                  matching_mixture_weights: torch.tensor,
                  csp_mixture_priors: torch.tensor,
                  matching_mixture_priors: torch.tensor,
-                 csp_distribution_params: torch.tensor,
-                 optimization_list: list,
-                 no_match_distribution_parameters: torch.tensor,
-                 learning_rate: float):
-
-
-    #optimizer = torch.optim.Adam([csp_assignment_params, csp_distribution_params], lr=1E-3)
-    optimizer = torch.optim.Adam(optimization_list, lr=learning_rate)
-    maxIterators = 10000
-    prevLoss = torch.finfo(torch.float64).max
-    for i in range(maxIterators):
-        optimizer.zero_grad()
-        dist = CSPDetectionDistribution(distances, csp_mixture_weights, matching_mixture_weights, csp_distribution_params,
-                                        no_match_distribution_parameters)
-        loss = EM_minimization_function(samples, dist,csp_mixture_weights,matching_mixture_weights,csp_mixture_priors,matching_mixture_priors)
-        loss.backward()
-        optimizer.step()
-        print("Loss: ", loss.item(), prevLoss-loss.item(), csp_distribution_params.grad, no_match_distribution_parameters.grad)
-        if prevLoss < loss.item():
-            optimizer = torch.optim.Adam(optimization_list, lr=optimizer.param_groups[0]['lr']*0.5)
-        elif prevLoss - loss.item() < 1e-7 and (csp_distribution_params.grad.abs() < 1e-3).all():
-            break
-        elif (torch.abs(csp_distribution_params.grad) < 1E-2).all():
-            optimizer = torch.optim.Adam(optimization_list, lr=optimizer.param_groups[0]['lr'] * 1.1)
-
-        #
-
-        prevLoss = loss.item()
-
-    return loss.item()
-
-#
-def maximization(samples: tuple,
-                 distances: torch.tensor,
-                 csp_mixture_weights: torch.tensor,
-                 matching_mixture_weights: torch.tensor,
-                 csp_mixture_priors: torch.tensor,
-                 matching_mixture_priors: torch.tensor,
                  csp_distribution,
                  optimization_list: list,
                  no_match_distribution,
@@ -227,38 +189,27 @@ def maximization(samples: tuple,
 
 
     #optimizer = torch.optim.Adam([csp_assignment_params, csp_distribution_params], lr=1E-3)
-    optimizer = torch.optim.Adam(optimization_list, lr=learning_rate)
-    maxIterators = 10000
-    prevLoss = torch.finfo(torch.float64).max
-    previous_alpha = csp_distribution.alpha.detach().clone()
-    previous_scale = csp_distribution.scale.detach().clone()
-    for i in range(maxIterators):
+    optimizer = torch.optim.LBFGS(optimization_list, lr=learning_rate)
+    def closure():
         optimizer.zero_grad()
-        dist = CSPDetectionDistribution(distances, csp_mixture_weights, matching_mixture_weights, csp_distribution,
-                                        no_match_distribution)
-        loss = EM_minimization_function(samples, dist,csp_mixture_weights,matching_mixture_weights,csp_mixture_priors,matching_mixture_priors)
+        dist = CSPDetectionDistribution(distances,
+                                        csp_mixture_weights,
+                                        matching_mixture_weights,
+                                        csp_distribution,
+                                        non_matching_distribution)
+        loss = EM_minimization_function(samples,dist,
+                                        csp_mixture_weights,
+                                        matching_mixture_weights,
+                                        csp_mixture_priors,
+                                        matching_mixture_priors)
         loss.backward()
-        optimizer.step()
-        print("Loss: ", loss.item(), prevLoss-loss.item(), csp_distribution.alpha.grad, csp_distribution.scale.grad, optimizer.param_groups[0]['lr'])
-        if not torch.tensor([csp_distribution.alpha,csp_distribution.scale,csp_distribution.alpha.grad,csp_distribution.scale.grad]).isfinite().all():
-            with torch.no_grad():
-                csp_distribution.alpha[0] = previous_alpha[0]
-                csp_distribution.scale[0] = previous_scale[0]
-            optimizer = torch.optim.Adam(optimization_list, lr=optimizer.param_groups[0]['lr'] * 0.5)
-            print("Lowering Learning rate")
-            continue
-        elif prevLoss < loss.item():
-            optimizer = torch.optim.Adam(optimization_list, lr=optimizer.param_groups[0]['lr']*0.5)
-        elif prevLoss - loss.item() < 1e-7 and (torch.abs(torch.tensor([csp_distribution.alpha.grad,csp_distribution.scale.grad])) < gradient_convergence).all():
-            break
-        elif (torch.abs(torch.tensor([csp_distribution.alpha.grad,csp_distribution.scale.grad])) < 1E-2).all():
-            optimizer = torch.optim.Adam(optimization_list, lr=optimizer.param_groups[0]['lr'] * 1.1)
-
-        #
-
-        prevLoss = loss.item()
-        previous_alpha[0] = csp_distribution.alpha[0]
-        previous_scale[0] = csp_distribution.scale[0]
+        print(loss.item(),previous_loss-loss.item(),csp_distribution.alpha.grad, csp_distribution.scale.grad)
+        return loss
+    #
+    previous_loss = float('inf')
+    for i in range(1000):
+        loss = optimizer.step(closure)
+        previous_loss = loss
 
     return loss.item()
 def runEMStep(distances: torch.tensor,
@@ -424,7 +375,7 @@ if __name__ == "__main__":
     # run EM
     minSteps = 2
     maxEMSteps = 1000
-    learning_rate = 1E-3
+    learning_rate = 1E-2
     csp_mixture_weights = initial_csp_mixture_weights
     matching_mixture_weights = initial_matching_mixture_weights
     csp_distribution = initial_csp_distribution
