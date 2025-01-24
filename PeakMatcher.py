@@ -247,12 +247,8 @@ def maximization(samples: tuple,
             optimizer = torch.optim.Adam(optimization_list, lr=optimizer.param_groups[0]['lr'] * 0.5)
             print("Lowering Learning rate")
             continue
-        elif prevLoss < loss.item():
-            optimizer = torch.optim.Adam(optimization_list, lr=optimizer.param_groups[0]['lr']*0.5)
         elif prevLoss - loss.item() < 1e-7 and (torch.abs(torch.tensor([csp_distribution.alpha.grad,csp_distribution.scale.grad])) < gradient_convergence).all():
             break
-        elif (torch.abs(torch.tensor([csp_distribution.alpha.grad,csp_distribution.scale.grad])) < 1E-2).all():
-            optimizer = torch.optim.Adam(optimization_list, lr=optimizer.param_groups[0]['lr'] * 1.1)
 
         #
 
@@ -460,7 +456,7 @@ if __name__ == "__main__":
         print(f"csp_dist_change {csp_mean}, {csp_max}, nonMatching_dist_change {nonMatching_mean}, {nonMatching_max}")
 
 
-        if csp_distribution_converged and i >= minSteps:
+        if csp_distribution_converged and i >= minSteps and nonMatching_distribution_converged:
             break
         else:
             if i == maxEMSteps - 1:
