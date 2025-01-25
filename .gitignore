@@ -1,6 +1,5 @@
 # Ignore PyCharm project settings
-.idea/
-
+__pycache__/
 # Ignore virtual environments
 venv/
 .env/

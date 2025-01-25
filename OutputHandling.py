@@ -94,20 +94,10 @@ def outputResults(matchingProbabilities: np.array,
                                 chemicalShiftProbabilityTable: str,
                                 confidenceCutoff: float = 0.90):
 
-    if referencePeakList[1] == targetPeakList[1]:
-        raise ValueError("Reference peak list and target peak list must be specified at different dimensions")
-    if referencePeakList[1] == 0:
-        rowIsReference = True
-        row_peakList = referencePeakList
-        col_peakList = targetPeakList
-        assert(targetPeakList[1] == 1)
-    #
-    else:
-        rowIsReference = False
-        row_peakList = targetPeakList
-        col_peakList = referencePeakList
-        assert(referencePeakList[1] == 1)
-    #
+
+    row_peakList = referencePeakList
+    col_peakList = targetPeakList
+    assert(targetPeakList[1] == 1)
     #Get column labels!
     column_labels = pd.MultiIndex.from_frame(col_peakList[0][["Assignment"] + col_peakList[2]])
     row_labels = pd.MultiIndex.from_frame(row_peakList[0][["Assignment"] + row_peakList[2]])
@@ -116,13 +106,13 @@ def outputResults(matchingProbabilities: np.array,
     probability_df = pd.DataFrame(matchingProbabilities)
     probability_df.columns = column_labels
     probability_df.index = row_labels
-    probability_df.to_csv(probabilityTable,index=False)
+    probability_df.to_csv(probabilityTable)
 
     #output csp_probability matches
     csp_corrected_probability_df = pd.DataFrame(state_probability[:,:,1])
     csp_corrected_probability_df.columns = column_labels
     csp_corrected_probability_df.index = row_labels
-    csp_corrected_probability_df.to_csv(chemicalShiftProbabilityTable,index=False)
+    csp_corrected_probability_df.to_csv(chemicalShiftProbabilityTable)
 
     #build transferred peak lists
 

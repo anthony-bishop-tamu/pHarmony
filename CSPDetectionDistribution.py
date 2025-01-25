@@ -14,6 +14,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
     def __init__(self, distances: torch.tensor,
                  csp_mixture_weights: torch.tensor,
                  matching_mixture_weights: torch.tensor,
+                 missing_mixture_weights: torch.tensor,
                  csp_distribution: torch.distributions.Distribution,
                  non_matching_distribution: torch.distributions.Distribution):
         super().__init__()
@@ -25,6 +26,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
         self._csp_mixture_weights = csp_mixture_weights - csp_mixture_weights.logsumexp(dim=0,keepdim=True)
         self._matching_mixture_weights = matching_mixture_weights - matching_mixture_weights.logsumexp(dim=0, keepdim=True)
+        self._missing_mixture_weights = missing_mixture_weights - missing_mixture_weights.logsumexp(dim=0, keepdim=True)
         self._csp_distribution = csp_distribution
        # self._non_matching_parameters =
         self._non_matching_distribution = non_matching_distribution
@@ -62,9 +64,14 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         self._matching_likelihood = final_matching_likelihoods[:,:,0]
         self._match_non_matching_loglikelihoods = final_matching_likelihoods[:,:,1]
 
+        distributed_missing_mixture_weights = torch.zeros((self._distances.shape[1]+1,))
+        distributed_missing_mixture_weights[:-1] = self._missing_mixture_weights[0].unsqueeze(-1)
+        distributed_missing_mixture_weights[-1] = self._missing_mixture_weights.detach()[1]
+
         self._base_row_decision_likelihoods= torch.zeros((self._distances.shape[0],self._distances.shape[1]+1),dtype=torch.float32)
         self._base_row_decision_likelihoods[:,:] = self._match_non_matching_loglikelihoods.detach().sum(dim=-1).unsqueeze(1)
         self._base_row_decision_likelihoods[:,:-1] += self._matching_likelihood.detach() - self._match_non_matching_loglikelihoods.detach()
+        self._base_row_decision_likelihoods += distributed_missing_mixture_weights.unsqueeze(0).detach()
 
 
 

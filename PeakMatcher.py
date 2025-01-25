@@ -95,11 +95,10 @@ def getPeakPositionsFromFile(filename, cs_cols, uncertaintycols=None, fixedError
 def calculateMixtureWeights(csp_posterior_probabilities: torch.Tensor,
                             matching_posterior_probabilities: torch.Tensor,
                             csp_mixture_weight_priors: torch.Tensor,
-                            matching_mixture_weight_priors: torch.Tensor) -> torch.Tensor:
+                            matching_mixture_weight_priors: torch.Tensor,
+                            missing_mixture_weight_priors: torch.Tensor) -> torch.Tensor:
     #csp_scale = matching_posterior_probabilities.sum()
     #matching_scale = matching_posterior_probabilities.numel()
-    csp_scale = 1
-    matching_scale = 1
     clamp_min = 1E-6
 
     pseudo_csp_posterior_probabilities = csp_posterior_probabilities.exp().clone()
@@ -109,15 +108,18 @@ def calculateMixtureWeights(csp_posterior_probabilities: torch.Tensor,
 
 
     csp_mixture_weights = (pseudo_csp_posterior_probabilities*matching_posterior_probabilities.unsqueeze(-1)).detach()
-    csp_mixture_weights = (csp_mixture_weights.sum(dim=(0,1)) + csp_scale*(csp_mixture_weight_priors))/(matching_posterior_probabilities.sum() + csp_scale*(csp_mixture_weight_priors).sum())
+    csp_mixture_weights = (csp_mixture_weights.sum(dim=(0,1)) + (csp_mixture_weight_priors))/(matching_posterior_probabilities.sum() + (csp_mixture_weight_priors).sum())
     matching_mixture_weights = (torch.tensor([matching_posterior_probabilities.detach().sum(),(1-matching_posterior_probabilities.detach()).sum()])
-                                +matching_scale*(matching_mixture_weight_priors))/(matching_posterior_probabilities.numel() + (matching_scale*(matching_mixture_weight_priors)).sum())
+                                +(matching_mixture_weight_priors))/(matching_posterior_probabilities.numel() + matching_mixture_weight_priors.sum())
+    missing_mixture_weights = (torch.tensor([matching_posterior_probabilities.detach().sum(),(1-matching_posterior_probabilities.detach().sum(dim=-1)).sum()])
+                                +(missing_mixture_weight_priors))/(matching_posterior_probabilities.shape[0] + missing_mixture_weight_priors.sum())
     if csp_mixture_weights[1] < 1E-3:
         csp_mixture_weights = torch.tensor([1.0-1E-3,1E-3],dtype=torch.float64)
 
     assert (1 >= csp_mixture_weights).all() and (csp_mixture_weights >= 0).all()
     assert (1 >= matching_mixture_weights).all() and (matching_mixture_weights >= 0).all()
-    return csp_mixture_weights, matching_mixture_weights
+    assert (1 >= missing_mixture_weights).all() and (missing_mixture_weights >= 0).all()
+    return csp_mixture_weights, matching_mixture_weights,missing_mixture_weights
 def verifyTensorConvergence(torchPreviousParameter: torch.tensor,
                                torchNewParameter: torch.tensor,
                                averageDeviation: torch.tensor,
@@ -157,8 +159,10 @@ def calculateCSPDistParameters(quantile, cutoff, median):
 def EM_minimization_function(samples, dist: CSPDetectionDistribution,
                              csp_mixture_weights: torch.Tensor,
                              matching_mixture_weights: torch.Tensor,
+                             missing_mixture_weights: torch.Tensor,
                              csp_mixture_priors: torch.Tensor,
-                             matching_mixture_priors: torch.Tensor,):
+                             matching_mixture_priors: torch.Tensor,
+                             missing_mixture_priors: torch.Tensor,):
 
     logLikelihoodTerm = dist.log_prob(samples).sum()#/(samples.numel()*dist._distances.numel())
 
@@ -172,53 +176,19 @@ def EM_minimization_function(samples, dist: CSPDetectionDistribution,
     loss = (-1 * logLikelihoodTerm +
             -1*((csp_mixture_priors-1.0)*csp_mixture_weights).sum()+
             -1*((matching_mixture_priors-1.0)*matching_mixture_weights).sum() +
+            -1*((missing_mixture_priors - 1.0) * missing_mixture_weights).sum() +
             scale_regularization + alpha_regularization + median_regularization + quantile_regularization)
     assert loss.isfinite().all()
     return loss
-def maximization(samples: tuple,
-                 distances: torch.tensor,
-                 csp_mixture_weights: torch.tensor,
-                 matching_mixture_weights: torch.tensor,
-                 csp_mixture_priors: torch.tensor,
-                 matching_mixture_priors: torch.tensor,
-                 csp_distribution_params: torch.tensor,
-                 optimization_list: list,
-                 no_match_distribution_parameters: torch.tensor,
-                 learning_rate: float):
-
-
-    #optimizer = torch.optim.Adam([csp_assignment_params, csp_distribution_params], lr=1E-3)
-    optimizer = torch.optim.Adam(optimization_list, lr=learning_rate)
-    maxIterators = 10000
-    prevLoss = torch.finfo(torch.float64).max
-    for i in range(maxIterators):
-        optimizer.zero_grad()
-        dist = CSPDetectionDistribution(distances, csp_mixture_weights, matching_mixture_weights, csp_distribution_params,
-                                        no_match_distribution_parameters)
-        loss = EM_minimization_function(samples, dist,csp_mixture_weights,matching_mixture_weights,csp_mixture_priors,matching_mixture_priors)
-        loss.backward()
-        optimizer.step()
-        print("Loss: ", loss.item(), prevLoss-loss.item(), csp_distribution_params.grad, no_match_distribution_parameters.grad)
-        if prevLoss < loss.item():
-            optimizer = torch.optim.Adam(optimization_list, lr=optimizer.param_groups[0]['lr']*0.5)
-        elif prevLoss - loss.item() < 1e-7 and (csp_distribution_params.grad.abs() < 1e-3).all():
-            break
-        elif (torch.abs(csp_distribution_params.grad) < 1E-2).all():
-            optimizer = torch.optim.Adam(optimization_list, lr=optimizer.param_groups[0]['lr'] * 1.1)
-
-        #
-
-        prevLoss = loss.item()
-
-    return loss.item()
-
 #
 def maximization(samples: tuple,
                  distances: torch.tensor,
                  csp_mixture_weights: torch.tensor,
                  matching_mixture_weights: torch.tensor,
+                 missing_mixture_weights: torch.tensor,
                  csp_mixture_priors: torch.tensor,
                  matching_mixture_priors: torch.tensor,
+                 missing_mixture_priors: torch.tensor,
                  csp_distribution,
                  optimization_list: list,
                  no_match_distribution,
@@ -234,9 +204,11 @@ def maximization(samples: tuple,
     previous_scale = csp_distribution.scale.detach().clone()
     for i in range(maxIterators):
         optimizer.zero_grad()
-        dist = CSPDetectionDistribution(distances, csp_mixture_weights, matching_mixture_weights, csp_distribution,
+        dist = CSPDetectionDistribution(distances, csp_mixture_weights, matching_mixture_weights, missing_mixture_weights, csp_distribution,
                                         no_match_distribution)
-        loss = EM_minimization_function(samples, dist,csp_mixture_weights,matching_mixture_weights,csp_mixture_priors,matching_mixture_priors)
+        loss = EM_minimization_function(samples, dist,
+                                        csp_mixture_weights,matching_mixture_weights, missing_mixture_weights,
+                                        csp_mixture_priors,matching_mixture_priors,missing_mixture_priors)
         loss.backward()
         optimizer.step()
         print("Loss: ", loss.item(), prevLoss-loss.item(), csp_distribution.alpha.grad, csp_distribution.scale.grad, optimizer.param_groups[0]['lr'])
@@ -260,8 +232,10 @@ def maximization(samples: tuple,
 def runEMStep(distances: torch.tensor,
               csp_mixture_weights: torch.tensor,
               matching_mixture_weights: torch.tensor,
+              missing_mixture_weights: torch.tensor,
               csp_mixture_priors: torch.tensor,
               matching_mixture_priors: torch.tensor,
+              missing_mixture_priors: torch.tensor,
               csp_distribution: torch.distributions.Distribution,
               non_matching_distribution: torch.distributions.Distribution,
               sampleSize: int,
@@ -273,19 +247,23 @@ def runEMStep(distances: torch.tensor,
         dist = CSPDetectionDistribution(distances,
                                         csp_mixture_weights,
                                         matching_mixture_weights,
+                                        missing_mixture_weights,
                                         csp_distribution,
                                         non_matching_distribution)
         #expectation step
         samples = dist.sample((sampleSize,))
         positionProbs = calculatePositionProb(samples, distances_squared_normalized.shape).detach()
         # Calculate new mixture weights
-        csp_mixture_weights, matching_mixture_weights = calculateMixtureWeights(dist.csp_posterior_probabilities,positionProbs,csp_mixture_priors,matching_mixture_priors)
+        csp_mixture_weights, matching_mixture_weights,missing_mixture_weights = calculateMixtureWeights(dist.csp_posterior_probabilities,positionProbs,
+                                                                                                        csp_mixture_priors,matching_mixture_priors,missing_mixture_priors)
         #maximization step
         maximization(samples,distances,
                      csp_mixture_weights.log(),
                      matching_mixture_weights.log(),
+                     missing_mixture_weights.log(),
                      csp_mixture_priors,
                      matching_mixture_priors,
+                     missing_mixture_priors,
                      csp_distribution,
                      [csp_distribution.alpha,csp_distribution.scale],
                      non_matching_distribution,
@@ -295,10 +273,13 @@ def runEMStep(distances: torch.tensor,
         dist = CSPDetectionDistribution(distances,
                                         csp_mixture_weights.log(),
                                         matching_mixture_weights.log(),
+                                        missing_mixture_weights.log(),
                                         csp_distribution,
                                         non_matching_distribution)
 
-        loss = EM_minimization_function(samples,dist,csp_mixture_weights.log(),matching_mixture_weights.log(),csp_mixture_priors,matching_mixture_priors)
+        loss = EM_minimization_function(samples,dist,
+                                        csp_mixture_weights.log(),matching_mixture_weights.log(), missing_mixture_weights.log(),
+                                        csp_mixture_priors, matching_mixture_priors, missing_mixture_priors)
         print("Loss: ", loss.item())
         if display_distributions:
             fig = buildPlot(positionProbs,
@@ -311,7 +292,7 @@ def runEMStep(distances: torch.tensor,
         
             fig.show()
         #
-        return samples, csp_mixture_weights.log(), matching_mixture_weights.log(), csp_distribution, new_non_matching_distribution
+        return samples, csp_mixture_weights.log(), matching_mixture_weights.log(), missing_mixture_weights.log(), csp_distribution, new_non_matching_distribution
 #
 def parseArguments():
     parser = argparse.ArgumentParser()
@@ -390,7 +371,8 @@ if __name__ == "__main__":
     expected_match_ratio = min(distances_squared_normalized.shape)/distances_squared_normalized.numel()
     match_std = expected_match_ratio*expected_missing_ratio
     matching_mixture_priors = calculateBetaParametersFromMeanAndVariance(mean=expected_match_ratio,variance=args.variance_scale_fraction_missing*match_std**2)  #[matching, nonmatching)
-
+    missing_mixture_priors = calculateBetaParametersFromMeanAndVariance(mean=1.0-args.expected_fraction_missing,variance=args.variance_scale_fraction_missing*args.expected_fraction_missing**2)
+    initial_missing_mixture_weights = missing_mixture_priors.detach().clone()
     #initial_non_matching_distribution = torch.distributions.Uniform(0.0005,distances_squared_normalized.max()+0.0005)
 
     # get appropriate sample size
@@ -402,6 +384,7 @@ if __name__ == "__main__":
         dist = CSPDetectionDistribution(distances_squared_normalized,
                                         initial_csp_mixture_weights,
                                         initial_matching_mixture_weights,
+                                        initial_missing_mixture_weights,
                                         initial_csp_distribution,
                                         initial_non_matching_distribution)
         samples = dist.sample((sampleSize,))
@@ -423,24 +406,27 @@ if __name__ == "__main__":
     learning_rate = 1E-3
     csp_mixture_weights = initial_csp_mixture_weights
     matching_mixture_weights = initial_matching_mixture_weights
+    missing_mixture_weights = initial_missing_mixture_weights
     csp_distribution = initial_csp_distribution
     non_matching_distribution = initial_non_matching_distribution
     for i in range(maxEMSteps):
         previous_dist = dist
         previous_matching_probs = positionProbs
 
-        samples, csp_mixture_weights, matching_mixture_weights,csp_distribution, non_matching_distribution = runEMStep(
+        samples, csp_mixture_weights, matching_mixture_weights, missing_mixture_weights, csp_distribution, non_matching_distribution = runEMStep(
                   distances_squared_normalized,
                   csp_mixture_weights,
                   matching_mixture_weights,
+                  missing_mixture_weights,
                   csp_mixture_priors,
                   matching_mixture_priors,
+                  missing_mixture_priors,
                   csp_distribution,
                   non_matching_distribution,
                   sampleSize,
                   learning_rate,
                   args.gradient_convergence)
-        dist = CSPDetectionDistribution(distances_squared_normalized, csp_mixture_weights, matching_mixture_weights,
+        dist = CSPDetectionDistribution(distances_squared_normalized, csp_mixture_weights, matching_mixture_weights, missing_mixture_weights,
                                         csp_distribution,
                                         non_matching_distribution)
         positionProbs = calculatePositionProb(samples, distances_squared_normalized.shape).detach()
