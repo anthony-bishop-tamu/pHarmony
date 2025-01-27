@@ -40,6 +40,36 @@ class Frechet(torch.distributions.Distribution):
         else:
             return self.scale*self.scale*(torch.lgamma(1-2.0/self.alpha).exp() - torch.lgamma(1-1.0/self.alpha).exp()**2)
         #
+class RadialFrechet(Frechet):
+    def __init__(self, alpha, scale, dim, loc=0, validate_args=None):
+        self._dim = dim
+        self._radialFactor = torch.log(2*torch.pi**(self._dim/2.0)) - torch.special.gammaln(self._dim/2.0)
+        super(RadialFrechet, self).__init__(alpha, scale, loc, validate_args=validate_args)
+    def log_prob(self, x):
+        #x is distances^2
+        frechet = super(RadialFrechet, self).log_prob(x)
+        radialScale = torch.log(x)*(self._dim - 1.0) - self._radialFactor
+        return frechet + radialScale
+    #
+#
+class RadialChi2(torch.distributions.Chi2):
+    def __init__(self, dof, validate_args=None):
+        self._radialFactor = torch.log(2 * torch.pi ** (dof / 2.0)) - torch.special.gammaln(dof / 2.0)
+        super(RadialChi2, self).__init__(dof, validate_args=validate_args)
+    def log_prob(self, x):
+        #x is distances^2
+        chi2 = super(RadialChi2, self).log_prob(x)
+        radialScale = torch.log(x)*(self.df - 1.0) - self._radialFactor
+        return chi2 + radialScale
+    #
+
+class UniformDistanceSquared(torch.distributions.Distribution):
+    def __init__(self,dim, Rmax, validate_args=None):
+        self._dim = dim
+        self._Rmax = Rmax
+        super(UniformDistanceSquared, self).__init__(torch.Size(), validate_args=validate_args)
+    def log_prob(self, x):
+        return torch.log(self._dim/(2*self._Rmax)).unsqueeze(-1) + ((self._dim-2.0)/2.0) * torch.log(x)
 
 class KDEDensity(torch.distributions.Distribution):
     pass

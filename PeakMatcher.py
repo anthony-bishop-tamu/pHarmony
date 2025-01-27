@@ -8,7 +8,7 @@ import argparse
 from CSPDetectionDistribution import CSPDetectionDistribution
 from matplotlib import pyplot as plt
 from OutputHandling import buildPlot, outputResults
-from Frechet import KDEDensity, LogTransformedKDEDensity,Frechet, LogDiscreteDistribution
+from Frechet import Frechet, UniformDistanceSquared
 from pathlib import Path
 class SampleSizeToLargeError(Exception):
     pass
@@ -48,28 +48,12 @@ def initalizeAllComponents(distances,true_non_matching):
     m  = max(distances.max().item(),true_non_matching.max().item())
     eval_grid = torch.from_numpy(np.linspace(np.log(0.0005),np.log(m)+0.0005,300)).exp().type(torch.float64)#hyperparameter
 
-    csp_distribution = Frechet(alpha=torch.tensor([2.0],dtype=torch.float64), scale=torch.tensor([10.0],dtype=torch.float64),)
+    csp_distribution = Frechet(alpha=torch.tensor([2.0],dtype=torch.float64),
+                                     scale=torch.tensor([10.0], dtype=torch.float64))
     non_matching_pdf = torch.zeros((distances.shape[0],eval_grid.shape[0]),dtype=torch.float64)
-    for i in range(distances.shape[0]):
-        non_matching_pdf[i,:] = LogTransformedKDEDensity(true_non_matching[i,:].flatten(),eval_grid).log_density
 
-    '''fig, ax = plt.subplots()
-       hist = ax.hist(distances.flatten().numpy(),bins=eval_grid.numpy(),density=True)
-       hist = ax.hist(true_non_matching.flatten().numpy(),bins=eval_grid.numpy(),density=True)
-       ax.set_xscale('log')
-       ax.set_yscale('log')
-       #ax.plot(eval_grid.numpy(),no_matching_distribution.log_prob(eval_grid).exp().numpy())
-       ax.plot(eval_grid.numpy(),true_non_matching_distribution.log_prob(eval_grid).exp().numpy(),color='green')
-       no_match_prior = true_non_matching_distribution.log_prob(eval_grid)
-       no_matching_distribution.weigh_by_prior(no_match_prior)
-       ax.plot(eval_grid.numpy(),no_matching_distribution.log_prob(eval_grid).exp().numpy(),color='red')
-       csp_prior = torch.zeros_like(eval_grid)
-       csp_prior[eval_grid < 1000] = 1.0/1000
-       csp_distribution.weigh_by_prior(csp_prior)
-      # ax.plot(eval_grid.numpy(),no_matching_distribution.log_prob(eval_grid).exp().numpy())'''
-
-    # fig.show()
-    non_matching_distribution= LogDiscreteDistribution(non_matching_pdf,eval_grid)
+    non_matching_distribution = UniformDistanceSquared(dim=torch.tensor([2.0],dtype=torch.float64),
+                                                       Rmax=distances.max(dim=-1)[0])
 
     csp_conditional_mixture_weights = (initial_weights[:,:,:2].sum(dim=(0,1))/initial_weights[:,:,0:2].sum()).log()
     matching_mixture_weights = torch.stack(((initial_weights[:,:,0:2]).sum(), (1.0-initial_weights[:,:,0:2]).sum()),dim=0)

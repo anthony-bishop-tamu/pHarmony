@@ -2,7 +2,7 @@ import torch
 import pyro.distributions as dist
 import torch.distributions as torchdist
 import torch.nn.functional as F
-from Frechet import Frechet, KDEDensity, LogTransformedKDEDensity
+from Frechet import Frechet, KDEDensity, LogTransformedKDEDensity, RadialChi2
 import numpy as np
 def logisticDistribution(loc,scale):
     base_distribution = torchdist.Uniform(0, 1)

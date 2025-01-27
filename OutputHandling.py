@@ -18,7 +18,7 @@ def buildPlot(matchingProbabilities: torch.tensor,
         matches = distances[matching_mask].flatten()
         non_matches = distances[non_match_mask].flatten()
 
-        low_max = 100
+        low_max = distances.max()
 
         if matches.numel() > 0:
             low_max = matches.max()
@@ -37,7 +37,7 @@ def buildPlot(matchingProbabilities: torch.tensor,
         ax1.plot(bins,nocsp_pdf*csp_mixture_weights[0]*matching_mixture_weights[0],color='red',label='No CSP')
         ax1.plot(bins,csp_pdf*csp_mixture_weights[1]*matching_mixture_weights[0],color='blue',label='CSP Distribution')
         ax1.plot(bins,(nocsp_pdf*csp_mixture_weights[0]+csp_pdf*csp_mixture_weights[1])*matching_mixture_weights[0],color='green',label='All matches',linestyle='--')
-        ax1.plot(bins[1:],non_match_distribution.log_prob(bins[1:]).exp().detach().numpy()*matching_mixture_weights[1],color='orange',label='NonMatchDistribution')
+       # ax1.plot(bins[1:],non_match_distribution.log_prob(bins[1:]).exp().detach().numpy()*matching_mixture_weights[1],color='orange',label='NonMatchDistribution')
 
         #log scale plot
         log_bins = np.logspace(-0.5,np.log10(non_matches.max()),100)
@@ -54,8 +54,8 @@ def buildPlot(matchingProbabilities: torch.tensor,
 
         ax2.set_yscale('log')
         ax2_ylim = ax2.get_ylim()
-        ax2.plot(log_bins, non_match_distribution.log_prob(torch.from_numpy(log_bins)).exp().detach().numpy()*matching_mixture_weights[1], color='orange',
-                 label='NonMatchDistribution')
+       # ax2.plot(log_bins, non_match_distribution.log_prob(torch.from_numpy(log_bins)).exp().detach().numpy()*matching_mixture_weights[1], color='orange',
+       #          label='NonMatchDistribution')
         ax2.plot(log_bins,no_csp_match_distribution.log_prob(torch.from_numpy(log_bins)).exp().detach().numpy()*csp_mixture_weights[0]*matching_mixture_weights[0],color='red',label='No CSP')
         ax2.plot(log_bins,csp_distribution.log_prob(torch.from_numpy(log_bins)).exp().detach().numpy()*csp_mixture_weights[1]*matching_mixture_weights[0],color='blue',label='CSP Distribution')
 
@@ -72,13 +72,13 @@ def buildPlot(matchingProbabilities: torch.tensor,
         ax2.legend(loc='upper right')
 
 
-        ax3.hist(non_matches, bins=log_bins, color='red', label='NonMatches', alpha=0.5, density=True)
-        ax3.plot(log_bins, non_match_distribution.log_prob(torch.from_numpy(log_bins)).exp().detach().numpy(), color='red', label='Non matching distances')
+        #ax3.hist(non_matches, bins=log_bins, color='red', label='NonMatches', alpha=0.5, density=True)
+        #ax3.plot(log_bins, non_match_distribution.log_prob(torch.from_numpy(log_bins)).exp().detach().numpy(), color='red', label='Non matching distances')
 
-        ax3.legend(loc='upper right')
-        ax3.set_xscale('log')
-        ax3.set_ylabel('Frequency')
-        ax3.set_xlabel('Normalized Squared Distances')
+        #ax3.legend(loc='upper right')
+        #ax3.set_xscale('log')
+        #ax3.set_ylabel('Frequency')
+        #ax3.set_xlabel('Normalized Squared Distances')
 
         fig.tight_layout()
         return fig
@@ -136,8 +136,10 @@ def outputResults(matchingProbabilities: np.array,
     transfer_df.to_csv(transferedPeaks,index=False)
     transfer_df[transfer_df['MatchingProbability'] > confidenceCutoff].to_csv(highConfidenceTransferedPeaks,index=False)
 
+    transfer_df.rename(columns={"Assignment_ref": "Assignment"}, inplace=True)
+
     transfer_df[transfer_df['MatchingProbability'] > confidenceCutoff][
-        ["Assignment_ref"]+[label for label in targetPeakList[2]]
+        ["Assignment"]+[label for label in targetPeakList[2]]
         ].to_csv(highConfidenceTransferedPeakList,index=False,sep='\t')
 
 
