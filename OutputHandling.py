@@ -7,11 +7,10 @@ def buildPlot(matchingProbabilities: torch.tensor,
               csp_mixture_weights: np.array,
               no_csp_match_distribution: torch.distributions.Distribution,
               csp_distribution: torch.distributions.Distribution,
-              non_match_distribution: torch.distributions.Distribution,
               distances: torch.tensor,
               confidence_cutoff: float = 0.90):
 
-        fig, (ax1,ax2,ax3) = plt.subplots(3,1, figsize=(15,15))
+        fig, (ax1,ax2) = plt.subplots(2,1, figsize=(15,15))
         matching_mask = matchingProbabilities > confidence_cutoff
         non_match_mask = matchingProbabilities < (1.0-confidence_cutoff)
 
@@ -97,10 +96,9 @@ def outputResults(matchingProbabilities: np.array,
 
     row_peakList = referencePeakList
     col_peakList = targetPeakList
-    assert(targetPeakList[1] == 1)
     #Get column labels!
-    column_labels = pd.MultiIndex.from_frame(col_peakList[0][["Assignment"] + col_peakList[2]])
-    row_labels = pd.MultiIndex.from_frame(row_peakList[0][["Assignment"] + row_peakList[2]])
+    column_labels = pd.MultiIndex.from_frame(col_peakList[0][["Assignment"] + col_peakList[1]])
+    row_labels = pd.MultiIndex.from_frame(row_peakList[0][["Assignment"] + row_peakList[1]])
 
     #output matching probability matrix
     probability_df = pd.DataFrame(matchingProbabilities)
@@ -122,16 +120,16 @@ def outputResults(matchingProbabilities: np.array,
     csp_confidences = state_probability[row_indexes,column_indexes,1]
     referencePeaks = referencePeakList[0].iloc[row_indexes][["Assignment"]]
     targetPeaks = targetPeakList[0].iloc[column_indexes][["Assignment"]]
-    targetPositions = targetPeakList[0].iloc[column_indexes][targetPeakList[2]]
-    referencePositions = referencePeakList[0].iloc[row_indexes][referencePeakList[2]]
+    targetPositions = targetPeakList[0].iloc[column_indexes][targetPeakList[1]]
+    referencePositions = referencePeakList[0].iloc[row_indexes][referencePeakList[1]]
     match_probs = pd.DataFrame(match_probs, columns=["MatchingProbability"])
     csp_probs = pd.DataFrame(csp_confidences, columns=["CSPProbability"])
 
     transfer_df = pd.concat([referencePeaks.reset_index(drop=True), referencePositions,
                              targetPeaks.reset_index(drop=True), targetPositions.reset_index(drop=True) ,
                              match_probs,csp_probs], axis=1)
-    transfer_df.columns = ([ "Assignment_ref"]+["ref_"+label for label in referencePeakList[2]]+
-                           ["Assignment_target"]+[label for label in targetPeakList[2] ] +
+    transfer_df.columns = ([ "Assignment_ref"]+["ref_"+label for label in referencePeakList[1]]+
+                           ["Assignment_target"]+[label for label in targetPeakList[1] ] +
                                [ "MatchingProbability", "CSPProbability"])
     transfer_df.to_csv(transferedPeaks,index=False)
     transfer_df[transfer_df['MatchingProbability'] > confidenceCutoff].to_csv(highConfidenceTransferedPeaks,index=False)
@@ -139,7 +137,7 @@ def outputResults(matchingProbabilities: np.array,
     transfer_df.rename(columns={"Assignment_ref": "Assignment"}, inplace=True)
 
     transfer_df[transfer_df['MatchingProbability'] > confidenceCutoff][
-        ["Assignment"]+[label for label in targetPeakList[2]]
+        ["Assignment"]+[label for label in targetPeakList[1]]
         ].to_csv(highConfidenceTransferedPeakList,index=False,sep='\t')
 
 

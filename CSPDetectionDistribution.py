@@ -65,7 +65,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         self._match_non_matching_loglikelihoods = final_matching_likelihoods[:,:,1]
 
         distributed_missing_mixture_weights = torch.zeros((self._distances.shape[1]+1,))
-        distributed_missing_mixture_weights[:-1] = self._missing_mixture_weights[0].unsqueeze(-1)
+        distributed_missing_mixture_weights[:-1] = self._missing_mixture_weights[0].unsqueeze(-1).detach()
         distributed_missing_mixture_weights[-1] = self._missing_mixture_weights.detach()[1]
 
         self._base_row_decision_likelihoods= torch.zeros((self._distances.shape[0],self._distances.shape[1]+1),dtype=torch.float32)
@@ -205,7 +205,6 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         nomatch_columns = sample[~matched_mask]
         log_prob = self._match_non_matching_loglikelihoods[nomatch_rows[...,1],nomatch_columns].sum() + self._matching_likelihood[match_rows[...,1],match_columns].sum()
 
-
         return log_prob.sum()/sample.numel()
     @property
     def csp_posterior_probabilities(self) -> torch.Tensor:
@@ -226,8 +225,16 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
     def distances(self) -> torch.Tensor:
         return self._distances
     @property
-    def mixture_weights(self) -> torch.Tensor:
-        return self._mixture_weights
+    def csp_mixture_weights(self) -> torch.Tensor:
+        return self._csp_mixture_weights
+
+    @property
+    def matching_mixture_weights(self) -> torch.Tensor:
+        return self._matching_mixture_weights
+
+    @property
+    def missing_mixture_weights(self) -> torch.Tensor:
+        return self._missing_mixture_weights
 
 
 
