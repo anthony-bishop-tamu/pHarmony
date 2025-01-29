@@ -11,6 +11,7 @@ def logisticDistribution(loc,scale):
     return logistic
 #
 class CSPDetectionDistribution(torch.distributions.Distribution):
+    arg_constraints = {}
     def __init__(self, distances: torch.tensor,
                  csp_mixture_weights: torch.tensor,
                  matching_mixture_weights: torch.tensor,

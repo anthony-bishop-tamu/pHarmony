@@ -64,6 +64,7 @@ class RadialChi2(torch.distributions.Chi2):
     #
 
 class UniformDistanceSquared(torch.distributions.Distribution):
+    arg_constraints = {'_dim': constraints.positive, '_Rmax': constraints.positive}
     def __init__(self,dim, Rmax, validate_args=None):
         self._dim = dim
         self._Rmax = Rmax
