@@ -160,12 +160,16 @@ def EM_minimization_function(samples, dist: CSPDetectionDistribution,
     alpha_regularization = torch.relu((0 - dist.csp_distribution.alpha)*10)**6
     median_regularization = torch.relu((0 - dist.csp_distribution.median())*10)**6
     quantile_regularization = torch.relu((0 - dist.csp_distribution.quantile(torch.tensor([0.05])))*10)**6
+    if dist.csp_distribution.alpha.item() > 2:
+        variance_regularization = torch.relu((10-dist.csp_distribution.variance())*10)**6
+    else:
+        variance_regularization = 0
 
     loss = (-1 * logLikelihoodTerm +
             -1*((csp_mixture_priors-1.0)*csp_mixture_weights).sum()+
             -1*((matching_mixture_priors-1.0)*matching_mixture_weights).sum() +
             -1*((missing_mixture_priors - 1.0) * missing_mixture_weights).sum() +
-            scale_regularization + alpha_regularization + median_regularization + quantile_regularization)
+            scale_regularization + alpha_regularization + median_regularization + quantile_regularization + variance_regularization)
     assert loss.isfinite().all()
     return loss
 #
