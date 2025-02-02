@@ -74,6 +74,8 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         self._base_row_decision_likelihoods[:,:] = self._match_non_matching_loglikelihoods.detach().sum(dim=-1).unsqueeze(1)
         self._base_row_decision_likelihoods[:,:-1] += self._matching_likelihood.detach() - self._match_non_matching_loglikelihoods.detach()
         self._base_row_decision_likelihoods += distributed_missing_mixture_weights.unsqueeze(0).detach()
+        self._base_row_decision_likelihoods -= self._base_row_decision_likelihoods.logsumexp(dim=-1,keepdim=True)
+        self._base_row_decision_likelihoods.exp_()
 
 
 
@@ -109,10 +111,11 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
         #prob_tensor = (neg_entropy_tensor - neg_entropy_tensor.logsumexp(dim=-1,keepdim=True)).exp()
         prob_tensor = availableRows.type(torch.float64)
-        sampled_rows = torch.multinomial(prob_tensor.type(torch.float64),1).type(torch.int32).squeeze(-1)
-        with record_function("Probability_calculation"):
-            probabilities = row_decision_matrix[sample_indicies,sampled_rows,:] - row_decision_matrix[sample_indicies,sampled_rows,:].logsumexp(dim=-1,keepdim=True)
-        matched_columns = torch.multinomial(probabilities.exp(),1).type(torch.int32).squeeze()
+        with record_function("Row_Sampling"):
+            sampled_rows = torch.multinomial(prob_tensor.type(torch.float64),1).type(torch.int32).squeeze(-1)
+        probabilities = row_decision_matrix[sample_indicies,sampled_rows,:]
+        with record_function("Column_Sampling"):
+            matched_columns = torch.multinomial(probabilities,1).type(torch.int32).squeeze()
 
         no_matched_columns = matched_columns >= self._distances.shape[1]
 
@@ -136,9 +139,9 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
         sample[sample_indicies,sampled_rows]=matched_columns
 
-        row_decision_matrix[sample_indicies,sampled_rows,:] = -1*torch.inf
+        row_decision_matrix[sample_indicies,sampled_rows,:] = 0
         matched_columns_indexes = torch.nonzero(~no_matched_columns, as_tuple=True)[0]
-        row_decision_matrix[matched_columns_indexes,:,matched_columns[matched_columns_indexes]] = -1*torch.inf
+        row_decision_matrix[matched_columns_indexes,:,matched_columns[matched_columns_indexes]] = 0
 
     #
     def _resample(self, sample: torch.Tensor, sample_weights: torch.Tensor,
@@ -172,7 +175,6 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
             return
     #
     def _sample(self, sample_shape=torch.Size()) -> torch.tensor:
-        self._match_non_matching_loglikelihoods_col_first = self._match_non_matching_loglikelihoods.permute((1,0)).contiguous()
         availableRows = torch.ones(sample_shape+(self._distances.shape[0],), dtype=torch.bool)
         sample = torch.full(sample_shape+self._event_shape, -2, dtype=torch.int32)
         sample_weights = torch.zeros(sample_shape, dtype=torch.float64)
