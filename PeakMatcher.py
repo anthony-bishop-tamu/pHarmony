@@ -14,6 +14,7 @@ from Frechet import Frechet, UniformDistanceSquared
 from pathlib import Path
 import copy
 import time
+from torch.profiler import profile, record_function, ProfilerActivity
 class SampleSizeToLargeError(Exception):
     pass
 #
@@ -161,7 +162,7 @@ def EM_minimization_function(samples, dist: CSPDetectionDistribution,
     median_regularization = torch.relu((0 - dist.csp_distribution.median())*10)**6
     quantile_regularization = torch.relu((0 - dist.csp_distribution.quantile(torch.tensor([0.05])))*10)**6
     if dist.csp_distribution.alpha.item() > 2:
-        variance_regularization = torch.relu((10-dist.csp_distribution.variance())*10)**6
+        variance_regularization = torch.relu((100-dist.csp_distribution.variance())*10)**6
     else:
         variance_regularization = 0
 
@@ -180,7 +181,7 @@ def optimizeOffSet(reference_peak_positions: torch.Tensor,
                    csp_probabilities: torch.Tensor,
                    learning_rate: float,
                    gradient_convergence: float):
-    optimizer = torch.optim.LBFGS([offset], lr=0.01)
+    optimizer = torch.optim.LBFGS([offset], line_search_fn='strong_wolfe', lr=0.01)
     maxIterators = 10000
     prevLoss = torch.finfo(torch.float64).max
     previous_offset = offset.detach().clone()
@@ -200,11 +201,11 @@ def optimizeOffSet(reference_peak_positions: torch.Tensor,
         #
         loss = optimizer.step(closure)
 
-        print("OffSet Loss: ", loss.item(), prevLoss-loss.item(), offset.grad, offset)
+        print(f"OffSet step {i} Loss: ", loss.item(), prevLoss-loss.item(), offset.grad, offset)
         if not (offset.isfinite().all() and offset.grad.isfinite().all()):
             with torch.no_grad():
                 offset[:] = previous_offset[:]
-            optimizer = torch.optim.Adam([offset], lr=optimizer.param_groups[0]['lr'] * 0.5)
+            optimizer = torch.optim.LBFGS([offset], lr=optimizer.param_groups[0]['lr'] * 0.5,line_search_fn='strong_wolfe')
             print("Lowering Learning rate")
             continue
         elif abs(prevLoss - loss.item()) < 1e-5:
@@ -250,8 +251,10 @@ def maximization(samples: tuple,
             previous_alpha = csp_distribution.alpha.detach().clone()
             previous_scale = csp_distribution.scale.detach().clone()
         optimizer.step()
-        print("Loss: ", loss.item(), prevLoss-loss.item(), csp_distribution.alpha.item(), csp_distribution.scale.item(),
+        if i % 1 == 0:
+            print(f"Step {i} Loss: ", loss.item(), prevLoss-loss.item(), csp_distribution.alpha.item(), csp_distribution.scale.item(),
               csp_distribution.alpha.grad.item(), csp_distribution.scale.grad.item(), optimizer.param_groups[0]['lr'])
+        #
         if not (torch.tensor([csp_distribution.alpha,csp_distribution.scale,csp_distribution.alpha.grad,csp_distribution.scale.grad]).isfinite().all() and
             csp_distribution.alpha.item() > 0 and csp_distribution.scale.item() > 0 and prevLoss-loss.item() >= -1E-3):
             with torch.no_grad():
@@ -406,7 +409,7 @@ def runEM(distances_squared_normalized: torch.tensor,
     return dist, matching_probs
 
 def parseArguments():
-    torch.autograd.set_detect_anomaly(True)
+    #torch.autograd.set_detect_anomaly(True)
     parser = argparse.ArgumentParser()
     parser.add_argument('--reference_peak_list', required=True, type=Path, help='reference peak list filename')
     parser.add_argument( '--reference_cs_column_names', required=True, type=str, nargs='+', help='reference cs column names (e.g. \'w1\', \'w2\')')
@@ -572,7 +575,8 @@ if __name__ == "__main__":
     else:
         offset = torch.zeros((reference_peak_positions.shape[-2],), dtype=torch.float64, requires_grad=True)
 
-    posteriorMatchingDistribution, matchingProbabilities, distances_squared_normalized,offset = MatchPeaks(reference_peak_positions,
+    with profile(activities=[ProfilerActivity.CPU]) as prof:
+        posteriorMatchingDistribution, matchingProbabilities, distances_squared_normalized,offset = MatchPeaks(reference_peak_positions,
                                                                       target_peak_positions,
                                                                       args.expected_fraction_csp,
                                                                       args.variance_scale_fraction_csp,
@@ -611,6 +615,7 @@ if __name__ == "__main__":
     end_time = time.time()
     elapsed_time = end_time - start_time
     print(f"Elapsed Time: {elapsed_time/60.0} min")
+    print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
 #
 
 
