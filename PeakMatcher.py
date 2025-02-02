@@ -27,7 +27,7 @@ def calculateBetaParametersFromMeanAndVariance(mean, variance):
     alpha = mean*mu
     beta = (1-mean)*mu
 
-    return torch.tensor([alpha, beta],dtype=torch.float64)
+    return torch.tensor([alpha, beta],dtype=torch.float32)
 def initalizeAllComponents(distances):
     csp_conditional_assignments = torch.ones_like(distances)*0.1
     csp_conditional_assignments[distances < 5] = 0.9
@@ -51,10 +51,10 @@ def initalizeAllComponents(distances):
     csp_weights = initial_weights[:,:,1]
     no_matching_weights = initial_weights[:,:,2]
 
-    csp_distribution = Frechet(alpha=torch.tensor([2.0],dtype=torch.float64),
-                                     scale=torch.tensor([30], dtype=torch.float64))
+    csp_distribution = Frechet(alpha=torch.tensor([2.0],dtype=torch.float32),
+                                     scale=torch.tensor([30], dtype=torch.float32))
 
-    non_matching_distribution = UniformDistanceSquared(dim=torch.tensor([2.0],dtype=torch.float64),
+    non_matching_distribution = UniformDistanceSquared(dim=torch.tensor([2.0],dtype=torch.float32),
                                                        Rmax=distances.max(dim=-1)[0])
 
     #non_matching_distribution = torch.distributions.Uniform(0,distances.max()+0.005)
@@ -68,14 +68,14 @@ def initalizeAllComponents(distances):
 #
 def getPeakPositionsFromFile(filename, cs_cols, uncertaintycols=None, fixedError=None):
     df = pd.read_csv(filename,sep="\s+")
-    positions = df[cs_cols].to_numpy(dtype=np.float64)
+    positions = df[cs_cols].to_numpy(dtype=np.float32)
     if positions.shape[0] == 0:
         raise RuntimeError(f"No peaks detected in File: {filename}")
     if uncertaintycols is not None:
-        uncertainties = df[uncertaintycols].to_numpy(dtype=np.float64)
+        uncertainties = df[uncertaintycols].to_numpy(dtype=np.float32)
     elif fixedError is not None:
         uncertainties = np.zeros_like(positions)
-        uncertainties[:,:] = np.array(fixedError,dtype=np.float64)[np.newaxis,:]
+        uncertainties[:,:] = np.array(fixedError,dtype=np.float32)[np.newaxis,:]
     else:
         raise ValueError("Must specify either uncertaintycols or fixedError")
     #
@@ -103,7 +103,7 @@ def calculateMixtureWeights(csp_posterior_probabilities: torch.Tensor,
     missing_mixture_weights = (torch.tensor([matching_posterior_probabilities.detach().sum(),(1-matching_posterior_probabilities.detach().sum(dim=-1)).sum()])
                                 +(missing_mixture_weight_priors))/(matching_posterior_probabilities.shape[0] + missing_mixture_weight_priors.sum())
     if csp_mixture_weights[1] < 1E-3:
-        csp_mixture_weights = torch.tensor([1.0-1E-3,1E-3],dtype=torch.float64)
+        csp_mixture_weights = torch.tensor([1.0-1E-3,1E-3],dtype=torch.float32)
 
     assert (1 >= csp_mixture_weights).all() and (csp_mixture_weights >= 0).all()
     assert (1 >= matching_mixture_weights).all() and (matching_mixture_weights >= 0).all()
@@ -132,8 +132,8 @@ def validateSufficentSampling(samples: tuple, shape: tuple) -> bool:
     firstHalf = calculatePositionProb(matchings[::2,...], shape)
     secondHalf = calculatePositionProb(matchings[1::2,...], shape)
     converged, mean, max = verifyTensorConvergence(firstHalf,secondHalf,
-                            torch.tensor([0.01],dtype=torch.float64),
-                            torch.tensor([0.05],dtype=torch.float64))
+                            torch.tensor([0.01],dtype=torch.float32),
+                            torch.tensor([0.05],dtype=torch.float32))
     return converged
 #
 def calculateCSPDistParameters(quantile, cutoff, median):
@@ -143,7 +143,7 @@ def calculateCSPDistParameters(quantile, cutoff, median):
 
     k = numerator / denominator
     lam = median/torch.pow(torch.log(torch.tensor([2.0])),1.0/k)
-    return torch.tensor([k,lam],dtype=torch.float64)
+    return torch.tensor([k,lam],dtype=torch.float32)
 #
 def EM_minimization_function(samples, dist: CSPDetectionDistribution,
                              csp_mixture_weights: torch.Tensor,
@@ -183,7 +183,7 @@ def optimizeOffSet(reference_peak_positions: torch.Tensor,
                    gradient_convergence: float):
     optimizer = torch.optim.LBFGS([offset], line_search_fn='strong_wolfe', lr=0.01)
     maxIterators = 10000
-    prevLoss = torch.finfo(torch.float64).max
+    prevLoss = torch.finfo(torch.float32).max
     previous_offset = offset.detach().clone()
     for i in range(maxIterators):
         def closure():
@@ -236,7 +236,7 @@ def maximization(samples: tuple,
     #optimizer = torch.optim.Adam([csp_assignment_params, csp_distribution_params], lr=1E-3)
     optimizer = torch.optim.Adam(optimization_list, lr=learning_rate)
     maxIterators = 10000
-    prevLoss = torch.finfo(torch.float64).max
+    prevLoss = torch.finfo(torch.float32).max
     previous_alpha = csp_distribution.alpha.detach().clone()
     previous_scale = csp_distribution.scale.detach().clone()
     for i in range(maxIterators):
@@ -445,7 +445,7 @@ def calculateDistancesSquaredNormalized(reference_peak_positions: torch.Tensor,
     )
     distances_squared_normalized = components_distances_squared_normalized.sum(dim=-1)
     with torch.no_grad():
-        distances_squared_normalized[distances_squared_normalized == 0] = torch.finfo(torch.float64).eps
+        distances_squared_normalized[distances_squared_normalized == 0] = torch.finfo(torch.float32).eps
 
     return distances_squared_normalized
 #
@@ -464,7 +464,7 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
 
     #intialization
     if fixedOffset is None:
-        offset = torch.zeros((reference_peak_positions.shape[-2],), dtype=torch.float64, requires_grad=True)
+        offset = torch.zeros((reference_peak_positions.shape[-2],), dtype=torch.float32, requires_grad=True)
     else:
         offset = fixedOffset.detach().clone()
 
@@ -573,7 +573,7 @@ if __name__ == "__main__":
     if args.compute_reference_offset:
        offset = None
     else:
-        offset = torch.zeros((reference_peak_positions.shape[-2],), dtype=torch.float64, requires_grad=True)
+        offset = torch.zeros((reference_peak_positions.shape[-2],), dtype=torch.float32, requires_grad=True)
 
     with profile(activities=[ProfilerActivity.CPU]) as prof:
         posteriorMatchingDistribution, matchingProbabilities, distances_squared_normalized,offset = MatchPeaks(reference_peak_positions,
