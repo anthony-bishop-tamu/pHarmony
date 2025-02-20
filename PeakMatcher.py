@@ -29,11 +29,11 @@ def calculateBetaParametersFromMeanAndVariance(mean, variance):
 
     return torch.tensor([alpha, beta],dtype=torch.float64)
 def initalizeAllComponents(distances):
-    csp_conditional_assignments = torch.ones_like(distances)*0.1
-    csp_conditional_assignments[distances < 5] = 0.9
+    csp_conditional_assignments = torch.ones_like(distances)*0.05
+    csp_conditional_assignments[distances < 3] = 0.95
     csp_conditional_assignments = torch.stack((csp_conditional_assignments,1.0-csp_conditional_assignments),dim=2).log()
 
-    matching_probabilities = torch.ones_like(distances)*0.1/distances.shape[1]
+    matching_probabilities = torch.ones_like(distances)*0.01/distances.shape[1]
     matching_probabilities[torch.arange(distances.shape[0]),torch.argmin(distances, dim=-1)] = 0.9
     matching_probabilities=matching_probabilities.log()
     #sinkhorn iterate
@@ -158,11 +158,11 @@ def EM_minimization_function(samples, dist: CSPDetectionDistribution,
     #positionProb = calculatePositionProb(samples, dist._distances.shape)
 
     scale_regularization = torch.relu((0 - dist.csp_distribution.scale)*10)**6
-    alpha_regularization = torch.relu((1.0- dist.csp_distribution.alpha)*10)**6
-    median_regularization = torch.relu((0 - dist.csp_distribution.median())*10)**6
-    quantile_regularization = torch.relu((0 - dist.csp_distribution.quantile(torch.tensor([0.05])))*10)**6
+    alpha_regularization = torch.relu((1.05- dist.csp_distribution.alpha)*10)**6
+    median_regularization = torch.relu((5 - dist.csp_distribution.mode())*10)**6
+    quantile_regularization = torch.relu((3 - dist.csp_distribution.quantile(torch.tensor([0.001])))*10)**6
     if dist.csp_distribution.alpha.item() > 2:
-        variance_regularization = torch.relu((100-dist.csp_distribution.variance())*10)**6
+        variance_regularization = torch.relu((10-dist.csp_distribution.variance())*10)**6
     else:
         variance_regularization = 0
 
@@ -182,14 +182,14 @@ def optimizeOffSet(reference_peak_positions: torch.Tensor,
                    learning_rate: float,
                    gradient_convergence: float):
     optimizer = torch.optim.LBFGS([offset], line_search_fn='strong_wolfe', lr=0.01)
-    maxIterators = 10000
+    maxIterators = 1000
     prevLoss = torch.finfo(torch.float64).max
     previous_offset = offset.detach().clone()
     for i in range(maxIterators):
         def closure():
             optimizer.zero_grad()
             distances = calculateDistancesSquaredNormalized(reference_peak_positions, target_peak_positions, offset)
-            no_csp_matches = (csp_probabilities[:,:,0]*matching_probabilities) > 0.95
+            no_csp_matches = (csp_probabilities[:,:,0]*matching_probabilities) > 0.90
             if no_csp_matches.sum() > 5:
                 loss = distances[no_csp_matches].sum()
             else:
@@ -235,7 +235,7 @@ def maximization(samples: tuple,
 
     #optimizer = torch.optim.Adam([csp_assignment_params, csp_distribution_params], lr=1E-3)
     optimizer = torch.optim.Adam(optimization_list, lr=learning_rate)
-    maxIterators = 10000
+    maxIterators = 1000
     prevLoss = torch.finfo(torch.float64).max
     previous_alpha = csp_distribution.alpha.detach().clone()
     previous_scale = csp_distribution.scale.detach().clone()
@@ -535,7 +535,7 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
           sampleSize,
           dist,
           matching_probs,
-          learning_rate=1,
+          learning_rate=0.05,
           gradient_convergence=gradient_convergence)
         if offset.requires_grad:
              previous_offset = offset.detach().clone()

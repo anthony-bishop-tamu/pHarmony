@@ -75,6 +75,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         self._base_row_decision_likelihoods[:,:-1] += self._matching_likelihood.detach() - self._match_non_matching_loglikelihoods.detach()
         self._base_row_decision_likelihoods += distributed_missing_mixture_weights.unsqueeze(0).detach()
         self._base_row_decision_likelihoods -= self._base_row_decision_likelihoods.logsumexp(dim=-1,keepdim=True)
+
         with record_function("decision_exponentiation"):
             self._base_row_decision_likelihoods.exp_()
 
@@ -96,10 +97,8 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
             sampled_rows = row_index_list[torch.arange(sample.shape[0]),sampled_rows]
 
         with record_function("Column_Sampling"):
-            col_index_list = torch.nonzero(availableCols, as_tuple=True)[1].reshape(sample.shape[0], -1).type(torch.int32)
-            probabilities = row_decision_matrix[sampled_rows.unsqueeze(-1), col_index_list]
-            og_matched_columns = torch.multinomial(probabilities,1).type(torch.int32).squeeze()
-            matched_columns = col_index_list[torch.arange(og_matched_columns.shape[0]),og_matched_columns]
+            probabilities = row_decision_matrix[sampled_rows,:]*availableCols
+            matched_columns = torch.multinomial(probabilities,1,replacement=True).type(torch.int32).squeeze()
 
         no_matched_columns = matched_columns >= self._distances.shape[1]
 
@@ -109,7 +108,6 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         decision_log[sample_indicies,decision_counter,0] = sampled_rows.type(torch.float64)
         decision_log[sample_indicies, decision_counter, 2] = row_decision_matrix[sampled_rows, matched_columns].type(torch.float64) #+row_probabilities
         decision_log[sample_indicies,decision_counter, 3] += row_probabilities
-
 
         #sample_weights += probabilities[sample_indicies,og_matched_columns]-decision_log[:, decision_counter, 3]
         sample_weights += row_probabilities
@@ -121,7 +119,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
         sample[sample_indicies,sampled_rows]=matched_columns
         availableRows[sample_indicies, sampled_rows] = False
-        availableCols[sample_indicies, matched_columns] = False
+        availableCols[sample_indicies[~no_matched_columns], matched_columns[~no_matched_columns]] = False
 
 
 
