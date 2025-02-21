@@ -518,7 +518,7 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
 
 
     #GET SAMPLE SIZE
-    sampleSize = distances_squared_normalized.shape[0]*10
+    sampleSize = distances_squared_normalized.shape[0]
     maxTries = 8
     samples=()
     dist = CSPDetectionDistribution(distances_squared_normalized,
@@ -527,7 +527,7 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
                                     initial_missing_mixture_weights,
                                     initial_csp_distribution,
                                     initial_non_matching_distribution)
-    samples = determineSampleSize(sampleSize,dist)
+    samples = dist.sample((sampleSize,))
     matching_probs = calculatePositionProb(samples,dist.distances.shape)
     for i in range(maxTries):
     #RUN EM
