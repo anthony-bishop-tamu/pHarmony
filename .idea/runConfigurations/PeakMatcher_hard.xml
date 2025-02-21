@@ -1,0 +1,26 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="PeakMatcher_hard" type="PythonConfigurationType" factoryName="Python">
+    <module name="PeakMatcher" />
+    <option name="ENV_FILES" value="" />
+    <option name="INTERPRETER_OPTIONS" value="" />
+    <option name="PARENT_ENVS" value="true" />
+    <envs>
+      <env name="PYTHONUNBUFFERED" value="1" />
+    </envs>
+    <option name="SDK_HOME" value="" />
+    <option name="SDK_NAME" value="PeakMatcher" />
+    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/../../tempWorkSpace/ab_IL1B_Deconvolution_plate_1_102624" />
+    <option name="IS_MODULE_SDK" value="false" />
+    <option name="ADD_CONTENT_ROOTS" value="true" />
+    <option name="ADD_SOURCE_ROOTS" value="true" />
+    <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
+    <option name="SCRIPT_NAME" value="$PROJECT_DIR$/PeakMatcher.py" />
+    <option name="PARAMETERS" value="--reference_peak_list IL1B_manually_transferred_assignments_fitted_81 --reference_cs_column_names w1 w2 --target_peak_list 401/fitted_401.list --target_cs_column_names w1 w2 --reference_peak_list_error 0.015 0.0015 --target_peak_list_error 0.015 0.0015 --output_directory &quot;debugging&quot; --compute_reference_offset" />
+    <option name="SHOW_COMMAND_LINE" value="false" />
+    <option name="EMULATE_TERMINAL" value="false" />
+    <option name="MODULE_MODE" value="false" />
+    <option name="REDIRECT_INPUT" value="false" />
+    <option name="INPUT_FILE" value="" />
+    <method v="2" />
+  </configuration>
+</component>

@@ -109,8 +109,8 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         decision_log[sample_indicies, decision_counter, 2] = row_decision_matrix[sampled_rows, matched_columns].type(torch.float64) #+row_probabilities
         decision_log[sample_indicies,decision_counter, 3] += row_probabilities
 
-        #sample_weights += probabilities[sample_indicies,og_matched_columns]-decision_log[:, decision_counter, 3]
-        sample_weights += row_probabilities
+        sample_weights += row_decision_matrix[sampled_rows,matched_columns] - (probabilities[sampled_rows,matched_columns]+decision_log[:, decision_counter, 3])
+        #sample_weights += row_probabilities
 
 
 

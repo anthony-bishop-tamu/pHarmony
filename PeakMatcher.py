@@ -127,13 +127,12 @@ def calculatePositionProb(sample, shape):
     assert (positionProbs.sum(dim=-1) < 1.0+1E-3).all() and (positionProbs.sum(dim=0) < 1.0+1E-3).all()
     return positionProbs
 #
-def validateSufficentSampling(samples: tuple, shape: tuple) -> bool:
-    matchings = samples
-    firstHalf = calculatePositionProb(matchings[::2,...], shape)
-    secondHalf = calculatePositionProb(matchings[1::2,...], shape)
+def validateSufficentSampling(sample1, sample2, shape: tuple) -> bool:
+    firstHalf = calculatePositionProb(sample1, shape)
+    secondHalf = calculatePositionProb(sample2, shape)
     converged, mean, max = verifyTensorConvergence(firstHalf,secondHalf,
                             torch.tensor([0.01],dtype=torch.float64),
-                            torch.tensor([0.05],dtype=torch.float64))
+                            torch.tensor([0.10],dtype=torch.float64))
     return converged
 #
 def calculateCSPDistParameters(quantile, cutoff, median):
@@ -297,7 +296,7 @@ def runEMStep(distances: torch.tensor,
                                         csp_distribution,
                                         non_matching_distribution)
         #expectation step
-        samples = dist.sample((sampleSize,))
+        samples = determineSampleSize(sampleSize,dist)
         positionProbs = calculatePositionProb(samples, distances.shape).detach()
 
         # Calculate new mixture weights
@@ -358,7 +357,7 @@ def runEM(distances_squared_normalized: torch.tensor,
               gradient_convergence: float,
               display_distributions: bool = False):
 
-    minSteps = 2
+    minSteps = 0
     maxEMSteps = 1000
     csp_mixture_weights = initial_csp_mixture_weights
     matching_mixture_weights = initial_matching_mixture_weights
@@ -383,6 +382,8 @@ def runEM(distances_squared_normalized: torch.tensor,
             learning_rate,
             gradient_convergence)
 
+        sampleSize = len(samples)
+
         dist = CSPDetectionDistribution(distances_squared_normalized, csp_mixture_weights, matching_mixture_weights,
                                         missing_mixture_weights,
                                         csp_distribution,
@@ -397,7 +398,7 @@ def runEM(distances_squared_normalized: torch.tensor,
             previous_matching_probs,
             matching_probs,
             0.05,
-            0.05)
+            0.10)
         print(f"csp_dist_change {csp_mean}, {csp_max}, nonMatching_dist_change {nonMatching_mean}, {nonMatching_max}")
 
         if csp_distribution_converged and i >= minSteps and nonMatching_distribution_converged:
@@ -451,6 +452,26 @@ def calculateDistancesSquaredNormalized(reference_peak_positions: torch.Tensor,
 
     return distances_squared_normalized
 #
+def determineSampleSize(startingSample,dist):
+    if isinstance(startingSample,int):
+        startingSample = dist.sample((startingSample,))
+    #
+    size = startingSample.shape[0]
+    sample1 = startingSample
+    sample2 = dist.sample((size,))
+    print(f"Validating Sample Size: {size} ")
+    maxTries = 10
+    i = 1
+    while not validateSufficentSampling(sample1,sample2,dist.distances.shape) and i < maxTries:
+        size *= 2
+        print(f"Increasing Sample Size to: {size}")
+        sample1 = dist.sample((int(size),))
+        sample2 = dist.sample((int(size),))
+        i += 1
+    #
+    print(f"New sample size {size}")
+    return sample1
+#
 def MatchPeaks(reference_peak_positions: torch.Tensor,
                target_peak_positions: torch.Tensor,
                expected_fraction_csp: float = 0.1,
@@ -497,29 +518,17 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
 
 
     #GET SAMPLE SIZE
-    sampleSize = distances_squared_normalized.shape[0]
+    sampleSize = distances_squared_normalized.shape[0]*10
     maxTries = 8
     samples=()
-    for i in range(maxTries):
-        print(f"Trying Sample Size: {sampleSize}",file=output)
-        dist = CSPDetectionDistribution(distances_squared_normalized,
-                                        initial_csp_mixture_weights,
-                                        initial_matching_mixture_weights,
-                                        initial_missing_mixture_weights,
-                                        initial_csp_distribution,
-                                        initial_non_matching_distribution)
-        samples = dist.sample((sampleSize,))
-        converged = validateSufficentSampling(samples, distances_squared_normalized.shape)
-        matching_probs = calculatePositionProb(samples, distances_squared_normalized.shape).detach()
-        if not converged:
-            sampleSize *= 2
-            if i == maxTries-1:
-                raise SampleSizeToLargeError
-        else:
-            print(f"Sample Size: {sampleSize} is sufficient",file=output)
-            break
-        #
-    #
+    dist = CSPDetectionDistribution(distances_squared_normalized,
+                                    initial_csp_mixture_weights,
+                                    initial_matching_mixture_weights,
+                                    initial_missing_mixture_weights,
+                                    initial_csp_distribution,
+                                    initial_non_matching_distribution)
+    samples = determineSampleSize(sampleSize,dist)
+    matching_probs = calculatePositionProb(samples,dist.distances.shape)
     for i in range(maxTries):
     #RUN EM
     # run EM
