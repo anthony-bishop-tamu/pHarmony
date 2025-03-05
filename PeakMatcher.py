@@ -390,8 +390,8 @@ def runEM(distances_squared_normalized: torch.tensor,
                                         non_matching_distribution)
         matching_probs = calculatePositionProb(samples, distances_squared_normalized.shape).detach()
 
-        csp_distribution_converged, csp_mean, csp_max = verifyTensorConvergence(dist.csp_posterior_probabilities.exp(),
-                                                                                previous_dist.csp_posterior_probabilities.exp(),
+        csp_distribution_converged, csp_mean, csp_max = verifyTensorConvergence(dist.csp_posterior_probabilities.exp()[:,:,1]*matching_probs,
+                                                                                previous_dist.csp_posterior_probabilities.exp()[:,:,1]*matching_probs,
                                                                                 0.05,
                                                                                 0.05)
         nonMatching_distribution_converged, nonMatching_mean, nonMatching_max = verifyTensorConvergence(
@@ -422,7 +422,7 @@ def parseArguments():
     parser.add_argument('--target_peak_list_error', required=True, type=float, nargs='+', help='Uncertainty in each dimension for the target peak list (e.g. \" 0.0015, 0.015 \" for a 2D HSQC [15N, 1H]')
     #parser.add_argument("--minimum_distance", type=float, help="Minimum normalized distance between two peaks, all normalized distances lower than this value will be set to this value",default=0.005)
     parser.add_argument('--expected_fraction_csp', type=float, help="Estimate of the fraction of peaks expected to undergo a chemical shift perturbation", default=0.1)
-    parser.add_argument("--variance_scale_fraction_csp",type=float, help="scaling factor for variance of the prior distribution of csp distribution weight", default=2.0)
+    parser.add_argument("--variance_scale_fraction_csp",type=float, help="scaling factor for variance of the prior distribution of csp distribution weight", default=5.0)
     parser.add_argument('--expected_fraction_missing', type=float, help="Estimate of the fraction of peaks that you think will be missing between spectra", default=0.1)
     parser.add_argument("--variance_scale_fraction_missing",type=float, help="scaling factor for variance of the prior distribution of matching distribution weight", default=2.0)
     parser.add_argument("--gradient_convergence",type=float, help="Gradient convergence criterion", default=1E-5)
@@ -498,7 +498,7 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
 
     #build priors
     expected_no_csp_ratio = 1.0 - expected_fraction_csp
-    no_csp_std = args.expected_fraction_csp  # Std deviation is arbitrarily set to being the same as the expected fraction csp
+    no_csp_std = expected_fraction_csp  # Std deviation is arbitrarily set to being the same as the expected fraction csp
 
     csp_mixture_priors = calculateBetaParametersFromMeanAndVariance(mean=expected_no_csp_ratio,
                                                                     variance=variance_scale_fraction_csp * no_csp_std ** 2)  # [no csp, csp ] (Given a match!)
