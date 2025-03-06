@@ -421,9 +421,9 @@ def parseArguments():
     parser.add_argument('--reference_peak_list_error', required=True, type=float, nargs='+', help='Uncertainty in each dimension for the reference peak list (e.g. \" 0.0015 0.015 \" for a 2D HSQC [15N, 1H]')
     parser.add_argument('--target_peak_list_error', required=True, type=float, nargs='+', help='Uncertainty in each dimension for the target peak list (e.g. \" 0.0015, 0.015 \" for a 2D HSQC [15N, 1H]')
     #parser.add_argument("--minimum_distance", type=float, help="Minimum normalized distance between two peaks, all normalized distances lower than this value will be set to this value",default=0.005)
-    parser.add_argument('--expected_fraction_csp', type=float, help="Estimate of the fraction of peaks expected to undergo a chemical shift perturbation", default=0.1)
+    parser.add_argument('--expected_fraction_csp', type=float, help="Estimate of the fraction of peaks expected to undergo a chemical shift perturbation", default=0.05)
     parser.add_argument("--variance_scale_fraction_csp",type=float, help="scaling factor for variance of the prior distribution of csp distribution weight", default=5.0)
-    parser.add_argument('--expected_fraction_missing', type=float, help="Estimate of the fraction of peaks that you think will be missing between spectra", default=0.1)
+    parser.add_argument('--expected_fraction_missing', type=float, help="Estimate of the fraction of peaks that you think will be missing between spectra", default=0.02)
     parser.add_argument("--variance_scale_fraction_missing",type=float, help="scaling factor for variance of the prior distribution of matching distribution weight", default=2.0)
     parser.add_argument("--gradient_convergence",type=float, help="Gradient convergence criterion", default=1E-5)
     parser.add_argument("--output_directory",type=Path,help="Directory path to output the results to", default="./peak_matcher_output")
@@ -571,6 +571,7 @@ if __name__ == "__main__":
     start_time = time.time()
     args = parseArguments()
     output_directory = args.output_directory
+    output_directory = output_directory.resolve()
     output_directory.mkdir(exist_ok=True, parents=True)
     display_distributions = args.display_distributions
 
@@ -617,6 +618,7 @@ if __name__ == "__main__":
                   posteriorMatchingDistribution.csp_distribution,
                   distances_squared_normalized.detach(),
                   0.50)
+    print(f"Output Directory: {output_directory}")
     fig.savefig(output_directory/f"{name_stem}_fittedDistributions.png")
     if display_distributions:
         fig.show()

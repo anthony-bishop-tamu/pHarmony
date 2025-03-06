@@ -65,7 +65,7 @@ if __name__ == "__main__":
     spectra_counter = 0
     for arg in sys.argv[2:]:
         resIndexes = ExtractCSPs(Path(arg),decoration).tolist()
-        if len(resIndexes) > 4:
+        if len(resIndexes) > 2 and '119' not in resIndexes:
             index_list += resIndexes
             experiment_no_re = r'/(\d+)/'
             plate_no_re = r'plate_(\d+)'
