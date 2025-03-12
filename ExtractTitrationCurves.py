@@ -17,7 +17,7 @@ if __name__ == '__main__':
     parser.add_argument('--R2Cutoff', default=0.9, type=float, help='R2Cutoff value')
     parser.add_argument("--output_directory", required=True, type=Path, help="Output directory")
     parser = parser.parse_args()
-
+    parser.output_directory = parser.output_directory.resolve()
     if len(parser.titration_peak_lists) != len(parser.titration_concentrations):
         print("There must be a titration peak list for every provided concentration")
         assert False
@@ -44,6 +44,8 @@ if __name__ == '__main__':
             reference_peak_positions = reference_peak_positions[peak_mask.to_numpy()]
 
             peakLists.append((0.0,reference_peaks))
+            name = parser.reference_peak_list.stem + "_transferredPeaks.list"
+            reference_peaks.to_csv(parser.output_directory/name, index=False,sep='\t')
 
         #
         else:
@@ -59,6 +61,8 @@ if __name__ == '__main__':
             reference_peaks = target_peaks
             reference_peak_positions = target_peak_positions
 
+            name = parser.titration_peak_lists[i].stem + "_transferredPeaks.list"
+            target_peaks.to_csv(parser.output_directory/name, index=False,sep='\t')
     #
     reference_peaks = peakLists[0][1]
     distances = pd.DataFrame(reference_peaks['Assignment']).reset_index(drop=True)
