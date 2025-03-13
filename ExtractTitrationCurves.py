@@ -13,7 +13,7 @@ if __name__ == '__main__':
     parser.add_argument('--titration_concentrations',required=True, nargs="+",type=float,help='titration concentrations')
     parser.add_argument('--titration_peak_lists', required=True, nargs='+', type=Path, help='list of titration peak lists (in order)')
     parser.add_argument('--w1_uncertainty_ppm', default=0.015, type=float, help='w1 uncertainty in ppm (15N)')
-    parser.add_argument('--w2_uncertainty_ppm', default=0.0015, type=float, help='w2 uncertainty in ppm (15N)')
+    parser.add_argument('--w2_uncertainty_ppm', default=0.0015, type=float, help='w2 uncertainty in ppm (1H)')
     parser.add_argument('--R2Cutoff', default=0.9, type=float, help='R2Cutoff value')
     parser.add_argument("--output_directory", required=True, type=Path, help="Output directory")
     parser = parser.parse_args()
@@ -26,7 +26,6 @@ if __name__ == '__main__':
         assert False
 
     peakLists = []
-    distances = []
     fixedError = [ parser.w1_uncertainty_ppm, parser.w2_uncertainty_ppm ]
     for i in range(len(parser.titration_concentrations)):
         if i == 0:
@@ -64,17 +63,16 @@ if __name__ == '__main__':
             name = parser.titration_peak_lists[i].stem + "_transferredPeaks.list"
             target_peaks.to_csv(parser.output_directory/name, index=False,sep='\t')
     #
-    reference_peaks = peakLists[0][1]
-    distances = pd.DataFrame(reference_peaks['Assignment']).reset_index(drop=True)
     parser.output_directory.mkdir(exist_ok=True,parents=True)
-    for i in range(1,len(peakLists)):
-        merged_df = reference_peaks.merge(peakLists[i][1],on='Assignment',how='outer',suffixes=('','_merged'))
-        merged_df = merged_df[merged_df['Assignment'] != '?-?']
-        merged_df['distances'] = np.sqrt((merged_df['w1'] - merged_df['w1_merged'])**2/10 + (merged_df['w2'] - merged_df['w2_merged'])**2)
-        distances[str(peakLists[i][0])] = merged_df['distances'].values
-    #
-    outputDistances = parser.output_directory / 'distances.csv'
-    distances.to_csv(outputDistances, index=False)
+    peakPositionFile = parser.output_directory / "peakPositions.xlsx"
+    with pd.ExcelWriter(peakPositionFile,engine="openpyxl") as writer:
+        for peakList in peakLists:
+            # add NaNs for missing peaks
+
+            merged_peakList = assigned_peaks[['Assignment']].merge(peakList[1], on='Assignment', how='left' )
+            merged_peakList.to_excel(writer, sheet_name=f"{peakList[0]}(mM)", index=False)
+        #
+
 
 
 
