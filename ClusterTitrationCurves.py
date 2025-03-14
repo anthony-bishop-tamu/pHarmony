@@ -13,33 +13,28 @@ import math
 from line_profiler import LineProfiler
 import concurrent.futures
 import pstats
-def PositionBindingEquation(Kd: np.array, CSPsat: np.array, position_0: np.array, P: float, X: np.array):
-    #position_calc = CSPsat * ((X[np.newaxis,:, np.newaxis] + P + Kd) - np.sqrt((X[np.newaxis,:, np.newaxis] + P + Kd)**2 - 4 * X[np.newaxis,:, np.newaxis] * P)) / (2 * P) + position_0
-    X_broadcasted = X[np.newaxis, :, np.newaxis]  # Avoid recomputation
+def CSPBindingEquation(Kd: np.array, CSPsat: np.array, P: float, X: np.array):
+    X_broadcasted = X[np.newaxis, :]  # Avoid recomputation
     A = X_broadcasted + P + Kd
     B = 4 * X_broadcasted * P
     sqrt_term = np.sqrt(np.square(A) - B)
 
-    position_calc = CSPsat * ((A - sqrt_term) / (2 * P)) + position_0
+    CSPs = CSPsat * ((A - sqrt_term) / (2 * P))
 
     #assert (position_calc != np.NaN).all()
-    return position_calc
+    return CSPs
 #
-def minimization(params: np.array, X: np.array, CSP: np.array, P: float, error):
-
+def minimization(params: np.array, X: np.array, CSP: np.array, P: float, error: np.array):
 
     n_kd = CSP.shape[0]
-    Kd = params[:n_kd].reshape((CSP.shape[0], 1,1))
-    CSPsat = params[n_kd:n_kd + CSP.shape[0]*CSP.shape[2]].reshape((CSP.shape[0], 1, CSP.shape[2]))
-
-    position_0 = params[n_kd + CSP.shape[0]*CSP.shape[2]:].reshape((CSP.shape[0], 1, CSP.shape[2]))
+    Kd = params[:n_kd].reshape((CSP.shape[0], 1))
+    CSPsat = params[n_kd:].reshape((CSP.shape[0], 1))
 
     assert Kd.base is params
     assert CSPsat.base is params
-    assert position_0.base is params
 
 
-    residuals = np.square((CSP - PositionBindingEquation(Kd, CSPsat,position_0, P, X))/(math.sqrt(2.0)*error))
+    residuals = np.square((CSP - CSPBindingEquation(Kd, CSPsat, P, X))/(math.sqrt(2.0)*error))
     sum = np.nansum(residuals)
     #print(sum)
     return sum
@@ -47,7 +42,7 @@ def minimization(params: np.array, X: np.array, CSP: np.array, P: float, error):
 def minimization_labels(params: np.array, labels: np.array, X: np.array, CSP: np.array, P: float, error):
 
 
-    n_csp_params = CSP.shape[2]*CSP.shape[0]*2
+    n_csp_params = CSP.shape[0]
     n_clusters = params.shape[0] - n_csp_params
     all_params = np.zeros((CSP.shape[0]+n_csp_params,))
 
@@ -65,28 +60,23 @@ def extractConcentrations(s):
     match = re.fullmatch(r'[-+]?\d*\.?\d+\(mM\)', s)
     return float(re.search(r"[-+]?\d*\.?\d+", s).group()) if match else None
 
-def generateScaledFits(titration_data: np.array, concentrations: np.array, protein_concentration: float, residueIndexes: np.array, labels: np.array, mean_params: np.array, std_params: np.array, plot_errors: np.array, scaling_factor: np.array):
+def generateScaledFits(CSPs: np.array, concentrations: np.array, protein_concentration: float, residueIndexes: np.array, labels: np.array, mean_params: np.array, std_params: np.array, plot_errors: np.array, scaling_factor: np.array):
     n_clusters = len(np.unique(labels))
     figsize = [ 6.4, 4.8]
     figsize[1] = figsize[1]/2 * n_clusters
     Kds = mean_params[:n_clusters]
-    CSPsat = mean_params[n_clusters:n_clusters + titration_data.shape[0] * titration_data.shape[2]].reshape(titration_data.shape[0], 1, titration_data.shape[2])
-    position_0 = mean_params[n_clusters + titration_data.shape[0] * titration_data.shape[2]:].reshape(titration_data.shape[0], 1, titration_data.shape[2])
-
-    CSPs = calculateCSPS(titration_data,scaling_factor)
+    CSPsat = mean_params[n_clusters:]
 
     fig, axs = plt.subplots(nrows=n_clusters, ncols=2, figsize=figsize)
     for i in range(0,n_clusters):
         cluster_mask = labels == i
         cluster_Kd = Kds[i:i+1]
-        cluster_CSPsats = CSPsat[cluster_mask]
-        cluster_position_0s = position_0[cluster_mask]
+        cluster_CSPsat = CSPsat[cluster_mask]
         cluster_CSPs = CSPs[cluster_mask, :]
         cluster_residue_indexes = residueIndexes[cluster_mask]
         cluster_plot_errors = plot_errors[cluster_mask]
         range_c = np.linspace(0, concentrations.max(), 100)
-        positions_calc = PositionBindingEquation(cluster_Kd, cluster_CSPsats, cluster_position_0s, protein_concentration, range_c.transpose())
-        CSP_calc = calculateCSPS(positions_calc, scaling_factor)
+        CSP_calc = CSPBindingEquation(cluster_Kd, cluster_CSPsat[:,np.newaxis], protein_concentration, range_c.transpose())
         generateScaledFitFigure(cluster_CSPs,concentrations, CSP_calc, range_c,cluster_residue_indexes,mean_params[i],std_params[i],cluster_plot_errors,axs[i,0],axs[i,1])
     #
     fig.tight_layout()
@@ -104,7 +94,7 @@ def generateScaledFitFigure(CSPs: np.array, concentrations: np.array, CSP_calc: 
     colors = [ line.get_color() for line in ax_actual.get_lines() ]
     ax_actual.set_xlabel('Ligand Concentration (mM)')
     ax_actual.set_ylabel("CSP (ppm)")
-    ax_actual.set_ylim([0,CSPs.max()*1.05])
+    ax_actual.set_ylim([0,np.nanmax(CSPs)*1.05])
     ax_actual.set_xlim([0,ax_actual.get_xlim()[1]])
     kd_textbox_coord = [ ax_actual.get_xlim()[0]*1.15, ax_actual.get_ylim()[1]*0.85]
     ax_actual.text(kd_textbox_coord[0],kd_textbox_coord[1],f"Kd: {cluster_Kd:.0f} ± {cluster_Kd_std:.0f} mM ", fontsize=12, color='black')
@@ -116,7 +106,7 @@ def generateScaledFitFigure(CSPs: np.array, concentrations: np.array, CSP_calc: 
     n_series = len(CSP_calc)
     interval = 1.0/(n_series+1)
     finalPoints = np.array([i*interval for i in range(1,n_series+1)])
-    scaling_factors = (finalPoints / np.max(CSPs,axis=1))[:,np.newaxis]
+    scaling_factors = (finalPoints / np.nanmax(CSPs,axis=1))[:,np.newaxis]
 
     scaled_cluster_titrations = CSPs * scaling_factors
     scaled_CSP_calc = CSP_calc * scaling_factors
@@ -131,10 +121,6 @@ def generateScaledFitFigure(CSPs: np.array, concentrations: np.array, CSP_calc: 
         ax_scaled.set_ylim([0.0,1.0])
         residue_textbox_x = ax_scaled.get_xlim()[1]*1.05
         ax_scaled.text(residue_textbox_x, scaled_cluster_titrations[i,-1],f"{cluster_residue_indexes[i]}N-H",va='center',fontsize=12,color=colors[i])
-
-
-
-
 
 
 def calculateBIC(coordinates: np.array, centroids: np.array, labels: np.array):
@@ -155,13 +141,14 @@ def MonteCarloKds(positions: np.array, concentrations: np.array, protein_concent
     scaling_factor = error/error[-1]
     error_adjusted_CSPs = calculateCSPS(error_adjusted_positions,scaling_factor)
     n_clusters = len(np.unique(labels))
-    monte_params = np.zeros((len(error_adjusted_positions),n_clusters+positions.shape[2]*2*positions.shape[0]))
+    monte_params = np.zeros((len(error_adjusted_positions),n_clusters+positions.shape[0]))
 
+    csp_errors = np.std(error_adjusted_CSPs,axis=0)
 
     for i in range(sample_size):
-        error_mod_data = error_adjusted_positions[i]
+        error_mod_data = error_adjusted_CSPs[i]
         result = opt.minimize(minimization_labels, params, method="L-BFGS-B", options={"ftol": 1e-9, "maxfun": 1000000},
-                              args=(labels, concentrations, error_mod_data, protein_concentration, error))
+                              args=(labels, concentrations, error_mod_data, protein_concentration, csp_errors))
         monte_params[i, :] = result.x  # Store result
         print(f"Monte Carlo round: {i} completed: success? {result.success}")
     #
@@ -243,28 +230,29 @@ if __name__ == '__main__':
     CSPs = calculateCSPS(titration_data,error/error[-1])
     selected_rows = []
     for i in range(0,len(residueIndexes)):
-        params = np.zeros((1+2*len(spectral_dimensions),))
-        params[0] = 500
-        params[1:1+len(spectral_dimensions)] = titration_data[i,-1,:] - titration_data[i,0,:]
-        params[1+len(spectral_dimensions):1+2*len(spectral_dimensions)] = titration_data[i,0,:]
+        params = np.zeros((2,))
+        params[0] = 1000
+        params[1] = 0.05
 
 
-        result = opt.minimize(minimization, params,
-                          args=(concentrations, titration_data[i:i+1,:,:], protein_concentration,error))
+        result = opt.minimize(minimization, params, method='L-BFGS-B',
+                          args=(concentrations, CSPs[i:i+1], protein_concentration,1.4*error[-1:]))
+
+        assert(result.success)
         params = result.x
         Kd = params[0]
-        CSPsat = params[1:1+len(spectral_dimensions)]
-        position_0 = params[1+len(spectral_dimensions):1+2*len(spectral_dimensions)]
+        CSPsat = params[1]
         sse = result.fun
         residueIndex = residueIndexes[i]
         print(residueIndex, Kd , CSPsat, sse, CSPs[i].max())
-        if (Kd < 1000).all() and (np.abs(CSPsat/error) > 7).any() and sse < 3:
+        if Kd < 1000 and CSPsat > 0.02 and sse < 3:
             selected_rows.append(i)
     #
     selected_rows = np.array(selected_rows)
     coords = coords[selected_rows,:]
     titration_data = titration_data[selected_rows,:,:]
     residueIndexes = residueIndexes[selected_rows]
+    CSPs = CSPs[selected_rows]
 
     labels_dict = {}
 
@@ -294,29 +282,27 @@ if __name__ == '__main__':
     labels = labels_dict[min_arg][0]
     n_clusters = len(np.unique(labels))
     print(f"Number of clusters: {n_clusters}")
-    params = np.zeros((n_clusters+len(spectral_dimensions)*2*len(labels),))
-    params[:n_clusters] = 100.0
-    params[n_clusters:n_clusters+len(labels)*len(spectral_dimensions)] = (titration_data[:,-1,:] - titration_data[:,0,:]).flatten()
-    params[n_clusters+len(labels)*len(spectral_dimensions):] = titration_data[:,0,:].flatten()
+    params = np.zeros((n_clusters+len(labels),))
+    params[:n_clusters] = 1000.0
+    params[n_clusters:] = np.nanmax(CSPs,axis=-1)
 
-
-
-    result = opt.minimize(minimization_labels, params, method="L-BFGS-B",options={"ftol":1e-9, "maxfun":1000000}, args=(labels, concentrations, titration_data, protein_concentration,error))
+    result = opt.minimize(minimization_labels, params, method="L-BFGS-B", args=(labels, concentrations, CSPs, protein_concentration,np.array([0.003])))
     print(result.x)
+    assert(result.success)
     '''profiler = LineProfiler()
     profiler.add_function(MonteCarloKds)
     profiler.add_function(minimization_labels)
     profiler.add_function(minimization)
     profiler.add_function(PositionBindingEquation)
     profiler.enable()'''
-    mean_params, std_params,error_adjusted_CSPs = MonteCarloKds(titration_data, concentrations, protein_concentration, labels, params,error)
+    mean_params, std_params,error_adjusted_CSPs = MonteCarloKds(titration_data, concentrations, protein_concentration, labels,params,error)
     '''profiler.disable()
     profiler.print_stats()'''
     #top_percentile = np.percentile(error_adjusted_CSPs,0.50+0.34, axis=0) - np.mean(error_adjusted_CSPs,axis=0)
     #bottom_percentile = np.percentile(error_adjusted_CSPs,0.5-0.34, axis=0) - np.mean(error_adjusted_CSPs,axis=0)
     #plot_errors = np.abs(np.array([bottom_percentile, top_percentile]).transpose(1,0,2))
     plot_errors = np.array([np.std(error_adjusted_CSPs, axis=0), np.std(error_adjusted_CSPs, axis=0)]).transpose(1,0,2)
-    fig= generateScaledFits(titration_data,concentrations,protein_concentration,residueIndexes,labels,mean_params, std_params,plot_errors,error/error[-1])
+    fig= generateScaledFits(CSPs,concentrations,protein_concentration,residueIndexes,labels,result.x, std_params,plot_errors,1.4*error[-1:])
 
     plot_file = output_directory/"ClusterTitrationCurves.png"
 
