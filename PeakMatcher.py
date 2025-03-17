@@ -20,6 +20,9 @@ class SampleSizeToLargeError(Exception):
 #
 class EMConvergenceFailureError(Exception):
     pass
+
+class NoPeaksFoundError(Exception):
+    pass
 def calculateBetaParametersFromMeanAndVariance(mean, variance):
     assert 0 < mean and mean < 1
     assert 0 < variance
@@ -70,7 +73,7 @@ def getPeakPositionsFromFile(filename, cs_cols, uncertaintycols=None, fixedError
     df = pd.read_csv(filename,sep="\s+")
     positions = df[cs_cols].to_numpy(dtype=np.float64)
     if positions.shape[0] == 0:
-        raise RuntimeError(f"No peaks detected in File: {filename}")
+        raise NoPeaksFoundError(f"No peaks detected in File: {filename}")
     if uncertaintycols is not None:
         uncertainties = df[uncertaintycols].to_numpy(dtype=np.float64)
     elif fixedError is not None:

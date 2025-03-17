@@ -60,24 +60,29 @@ def extractConcentrations(s):
     match = re.fullmatch(r'[-+]?\d*\.?\d+\(mM\)', s)
     return float(re.search(r"[-+]?\d*\.?\d+", s).group()) if match else None
 
-def generateScaledFits(CSPs: np.array, concentrations: np.array, protein_concentration: float, residueIndexes: np.array, labels: np.array, mean_params: np.array, std_params: np.array, plot_errors: np.array, scaling_factor: np.array):
+def generateScaledFits(CSPs: np.array, concentrations: np.array, protein_concentration: float, residueIndexes: np.array, labels: np.array, monte_params: np.array, plot_errors: np.array, scaling_factor: np.array):
     n_clusters = len(np.unique(labels))
     figsize = [ 6.4, 4.8]
     figsize[1] = figsize[1]/2 * n_clusters
-    Kds = mean_params[:n_clusters]
-    CSPsat = mean_params[n_clusters:]
+    median_params = np.median(monte_params, axis=0)
+    lb_params=np.quantile(monte_params, 0.05, axis=0)
+    ub_params=np.quantile(monte_params, 0.95, axis=0)
+    Kds = median_params[:n_clusters]
+    CSPsat = median_params[n_clusters:]
 
     fig, axs = plt.subplots(nrows=n_clusters, ncols=2, figsize=figsize)
+    if n_clusters == 1:
+        axs = axs[np.newaxis,:]
     for i in range(0,n_clusters):
         cluster_mask = labels == i
         cluster_Kd = Kds[i:i+1]
         cluster_CSPsat = CSPsat[cluster_mask]
-        cluster_CSPs = CSPs[cluster_mask, :]
+        cluster_CSPs = CSPs[cluster_mask]
         cluster_residue_indexes = residueIndexes[cluster_mask]
         cluster_plot_errors = plot_errors[cluster_mask]
         range_c = np.linspace(0, concentrations.max(), 100)
         CSP_calc = CSPBindingEquation(cluster_Kd, cluster_CSPsat[:,np.newaxis], protein_concentration, range_c.transpose())
-        generateScaledFitFigure(cluster_CSPs,concentrations, CSP_calc, range_c,cluster_residue_indexes,mean_params[i],std_params[i],cluster_plot_errors,axs[i,0],axs[i,1])
+        generateScaledFitFigure(cluster_CSPs,concentrations, CSP_calc, range_c,cluster_residue_indexes,median_params[i],lb_params[i],ub_params[i],cluster_plot_errors,axs[i,0],axs[i,1])
     #
     fig.tight_layout()
     return fig
@@ -86,7 +91,7 @@ def calculateCSPS(titration_data: np.array, scaling_factor: np.array):
     return np.sqrt(np.sum(((titration_data-titration_data[...,0:1,:])/scaling_factor)**2, axis=-1))
 #
 def generateScaledFitFigure(CSPs: np.array, concentrations: np.array, CSP_calc: np.array, range_c: np.array, cluster_residue_indexes: np.array,
-                            cluster_Kd: float, cluster_Kd_std: float, plot_error: np.array, ax_actual: plt.Axes, ax_scaled: plt.Axes):
+                            cluster_Kd: float, cluster_Kd_lb: float, cluster_Kd_ub: float, plot_error: np.array, ax_actual: plt.Axes, ax_scaled: plt.Axes):
 
 
     ax_actual.plot(range_c,CSP_calc.transpose(),linestyle='-',marker='')
@@ -97,7 +102,7 @@ def generateScaledFitFigure(CSPs: np.array, concentrations: np.array, CSP_calc: 
     ax_actual.set_ylim([0,np.nanmax(CSPs)*1.05])
     ax_actual.set_xlim([0,ax_actual.get_xlim()[1]])
     kd_textbox_coord = [ ax_actual.get_xlim()[0]*1.15, ax_actual.get_ylim()[1]*0.85]
-    ax_actual.text(kd_textbox_coord[0],kd_textbox_coord[1],f"Kd: {cluster_Kd:.0f} ± {cluster_Kd_std:.0f} mM ", fontsize=12, color='black')
+    ax_actual.text(kd_textbox_coord[0],kd_textbox_coord[1],f"Kd: {cluster_Kd:.0f}: {cluster_Kd_lb:.0f}, {cluster_Kd_ub:.0f} mM ", fontsize=12, color='black')
     for i in range(0,CSPs.shape[0]):
         ax_actual.errorbar(concentrations,CSPs[i,:],color=colors[i],yerr=plot_error[i,:],ecolor=colors[i],fmt='o')
 
@@ -106,7 +111,7 @@ def generateScaledFitFigure(CSPs: np.array, concentrations: np.array, CSP_calc: 
     n_series = len(CSP_calc)
     interval = 1.0/(n_series+1)
     finalPoints = np.array([i*interval for i in range(1,n_series+1)])
-    scaling_factors = (finalPoints / np.nanmax(CSPs,axis=1))[:,np.newaxis]
+    scaling_factors = (finalPoints / np.nanmax(CSP_calc,axis=1))[:,np.newaxis]
 
     scaled_cluster_titrations = CSPs * scaling_factors
     scaled_CSP_calc = CSP_calc * scaling_factors
@@ -120,7 +125,7 @@ def generateScaledFitFigure(CSPs: np.array, concentrations: np.array, CSP_calc: 
         ax_scaled.errorbar(concentrations,scaled_cluster_titrations[i,:],color=colors[i],yerr=scaled_error[i,:],ecolor=colors[i],fmt='o')
         ax_scaled.set_ylim([0.0,1.0])
         residue_textbox_x = ax_scaled.get_xlim()[1]*1.05
-        ax_scaled.text(residue_textbox_x, scaled_cluster_titrations[i,-1],f"{cluster_residue_indexes[i]}N-H",va='center',fontsize=12,color=colors[i])
+        ax_scaled.text(residue_textbox_x, scaled_CSP_calc[i,-1],f"{cluster_residue_indexes[i]}N-H",va='center',fontsize=12,color=colors[i])
 
 
 def calculateBIC(coordinates: np.array, centroids: np.array, labels: np.array):
@@ -136,7 +141,7 @@ def calculateBIC(coordinates: np.array, centroids: np.array, labels: np.array):
 
 #
 def MonteCarloKds(positions: np.array, concentrations: np.array, protein_concentration: float, labels: np.array, params: np.array, error:np.array):
-    sample_size = 100
+    sample_size = 1000
     error_adjusted_positions= scipy.stats.norm.rvs(loc=positions,scale=error[np.newaxis,np.newaxis,:],size=(sample_size,*positions.shape))
     scaling_factor = error/error[-1]
     error_adjusted_CSPs = calculateCSPS(error_adjusted_positions,scaling_factor)
@@ -147,12 +152,12 @@ def MonteCarloKds(positions: np.array, concentrations: np.array, protein_concent
 
     for i in range(sample_size):
         error_mod_data = error_adjusted_CSPs[i]
-        result = opt.minimize(minimization_labels, params, method="L-BFGS-B", options={"ftol": 1e-9, "maxfun": 1000000},
+        result = opt.minimize(minimization_labels, params, method="Powell", options={'maxiter': 1000000},
                               args=(labels, concentrations, error_mod_data, protein_concentration, csp_errors))
         monte_params[i, :] = result.x  # Store result
         print(f"Monte Carlo round: {i} completed: success? {result.success}")
     #
-    return np.mean(monte_params,axis=0), np.std(monte_params,axis=0), error_adjusted_CSPs
+    return monte_params, error_adjusted_CSPs
 
 def outputPML(residue_indexes:np.array, labels: np.array, Kds: np.array, Kd_error: np.array, outFilePath: str):
 
@@ -182,29 +187,16 @@ def outputPML(residue_indexes:np.array, labels: np.array, Kds: np.array, Kd_erro
     #
 
     outFile.close()
+def ClusterTitrationCurves(titration_data: Path, pdb_file: Path, chain: str, offset_index: int, protein_concentration: float, spectral_dimensions: list, error: list, output_directory:Path,name_stem:str ):
 
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--titration_data',required=True,type=Path,help='tiration data, an excel file of peak positions')
-    parser.add_argument('--pdb_file',required=True,type=Path,help='pdb file')
-    parser.add_argument('--chain',required=True,type=str,help='Chain code')
-    parser.add_argument('--offset_index',default=0,type=int,help='Value to add to the assigned residue index to match the pdb indexing')
-    parser.add_argument("--protein_concentration", required=True, type=float,help="Protein concentration")
-    parser.add_argument("--spectral_dimensions", required=True, nargs='+', type=str,help="Spectral dimensions present e.g. w1 w2")
-    parser.add_argument( "--error", required=True, type=float,nargs='+',help="error (ppm) for each indicated spectral dimension")
-    parser.add_argument("--output_directory", required=True, type=Path,help="Output directory")
-    parser = parser.parse_args()
-
-    output_directory = parser.output_directory
     output_directory.mkdir(exist_ok=True, parents=True)
 
-    protein_concentration = parser.protein_concentration
-    titration_sheets = pd.read_excel(parser.titration_data,sheet_name=None)
+    protein_concentration = protein_concentration
+    titration_sheets = pd.read_excel(titration_data,sheet_name=None)
     concentrations = []
 
-    spectral_dimensions = parser.spectral_dimensions
-    error = np.array(parser.error)
+    spectral_dimensions = spectral_dimensions
+    error = np.array(error)
     titration_data = []
     for sheet in titration_sheets:
         concentration = extractConcentrations(sheet)
@@ -219,12 +211,12 @@ if __name__ == '__main__':
     #Extract Data
     titration_data = np.array(titration_data).transpose([1,0,2])
     concentrations = np.array(concentrations)
-    structure = PDB.PDBParser().get_structure("protein", parser.pdb_file)
+    structure = PDB.PDBParser().get_structure("protein", pdb_file)
     if len(structure) != 1:
         raise Exception("There should be exactly one model in the pdb")
-    chain = structure[0][parser.chain]
+    chain = structure[0][chain]
     residueIndexes = titration_sheets[list(titration_sheets.keys())[0]]['Assignment'].apply(extractResIndex).to_numpy(dtype=np.int32)
-    residueIndexes += parser.offset_index
+    residueIndexes += offset_index
     coords = [ chain[res_id]['N'].get_coord() for res_id in residueIndexes.tolist() ]
     coords = np.array(coords)
     CSPs = calculateCSPS(titration_data,error/error[-1])
@@ -232,21 +224,26 @@ if __name__ == '__main__':
     for i in range(0,len(residueIndexes)):
         params = np.zeros((2,))
         params[0] = 1000
-        params[1] = 0.05
+        params[1] = np.nanmax(CSPs[i])
 
 
-        result = opt.minimize(minimization, params, method='L-BFGS-B',
+        result = opt.minimize(minimization, params, method='Powell',
                           args=(concentrations, CSPs[i:i+1], protein_concentration,1.4*error[-1:]))
 
-        assert(result.success)
+        if not result.success:
+            continue
         params = result.x
         Kd = params[0]
         CSPsat = params[1]
         sse = result.fun
         residueIndex = residueIndexes[i]
         print(residueIndex, Kd , CSPsat, sse, CSPs[i].max())
-        if Kd < 1000 and CSPsat > 0.02 and sse < 3:
+        if Kd < 1000 and CSPsat > 0.02 and sse < 3 and np.nanmax(CSPs[i]) > 0.01:
             selected_rows.append(i)
+    #
+    if len(selected_rows) < 5:
+        print("Too few residues selected: ")
+        return
     #
     selected_rows = np.array(selected_rows)
     coords = coords[selected_rows,:]
@@ -257,7 +254,7 @@ if __name__ == '__main__':
     labels_dict = {}
 
 
-    for i in range(1,20):
+    for i in range(1,min(20,len(selected_rows))):
         if i == 1:
             centroids = np.mean(coords, axis=0)[np.newaxis,:]
             labels = np.zeros(len(coords),dtype=int)
@@ -270,23 +267,23 @@ if __name__ == '__main__':
         print(f"Number of clusters: {i}, BIC: {BIC}")
         labels_dict[i] = (labels, BIC)
     #
-    min = 1E100
+    minimum = 1E100
     min_arg = 0
     for i in labels_dict.keys():
         labels = labels_dict[i][0]
         BIC = labels_dict[i][1]
-        if BIC < min:
+        if BIC < minimum:
             min_arg = i
-            min = BIC
+            minimum = BIC
 
     labels = labels_dict[min_arg][0]
     n_clusters = len(np.unique(labels))
     print(f"Number of clusters: {n_clusters}")
     params = np.zeros((n_clusters+len(labels),))
     params[:n_clusters] = 1000.0
-    params[n_clusters:] = np.nanmax(CSPs,axis=-1)
+    params[n_clusters:] = 0.1
 
-    result = opt.minimize(minimization_labels, params, method="L-BFGS-B", args=(labels, concentrations, CSPs, protein_concentration,np.array([0.003])))
+    result = opt.minimize(minimization_labels, params, method="Powell", options={'maxiter': 100000}, args=(labels, concentrations, CSPs, protein_concentration,np.array([0.003])))
     print(result.x)
     assert(result.success)
     '''profiler = LineProfiler()
@@ -295,19 +292,24 @@ if __name__ == '__main__':
     profiler.add_function(minimization)
     profiler.add_function(PositionBindingEquation)
     profiler.enable()'''
-    mean_params, std_params,error_adjusted_CSPs = MonteCarloKds(titration_data, concentrations, protein_concentration, labels,params,error)
+    monte_params, error_adjusted_CSPs = MonteCarloKds(titration_data, concentrations, protein_concentration, labels,params,error)
     '''profiler.disable()
     profiler.print_stats()'''
-    #top_percentile = np.percentile(error_adjusted_CSPs,0.50+0.34, axis=0) - np.mean(error_adjusted_CSPs,axis=0)
-    #bottom_percentile = np.percentile(error_adjusted_CSPs,0.5-0.34, axis=0) - np.mean(error_adjusted_CSPs,axis=0)
-    #plot_errors = np.abs(np.array([bottom_percentile, top_percentile]).transpose(1,0,2))
-    plot_errors = np.array([np.std(error_adjusted_CSPs, axis=0), np.std(error_adjusted_CSPs, axis=0)]).transpose(1,0,2)
-    fig= generateScaledFits(CSPs,concentrations,protein_concentration,residueIndexes,labels,result.x, std_params,plot_errors,1.4*error[-1:])
+    top_percentile = np.quantile(error_adjusted_CSPs,0.95, axis=0) - np.median(error_adjusted_CSPs,axis=0)
+    bottom_percentile = np.quantile(error_adjusted_CSPs,0.05, axis=0) - np.median(error_adjusted_CSPs,axis=0)
+    plot_errors = np.abs(np.array([bottom_percentile, top_percentile]).transpose(1,0,2))
+    #plot_errors = np.array([np.std(error_adjusted_CSPs, axis=0), np.std(error_adjusted_CSPs, axis=0)]).transpose(1,0,2)
+    fig= generateScaledFits(CSPs,concentrations,protein_concentration,residueIndexes,labels,monte_params,plot_errors,1.4*error[-1:])
 
-    plot_file = output_directory/"ClusterTitrationCurves.png"
+    plot_file = output_directory/f"{name_stem}_ClusterTitrationCurves.png"
+
+    median_Kds = np.median(monte_params, axis=0)[:n_clusters]
+    lb_Kds = np.quantile(monte_params, 0.05, axis=0)[:n_clusters]
+    ub_Kds = np.quantile(monte_params, 0.95, axis=0)[:n_clusters]
 
     fig.savefig(plot_file)
-    outputPML(residueIndexes,labels,mean_params[:n_clusters],std_params[:n_clusters],"clusters.pml")
+    plt.close(fig)
+    outputPML(residueIndexes,labels,median_Kds,(ub_Kds-lb_Kds)/2,output_directory/f"{name_stem}_clusters.pml")
     unique_clusters = np.unique(labels)
     cluster_data = [ ]
     for unique_cluster in unique_clusters:
@@ -315,14 +317,32 @@ if __name__ == '__main__':
         cluster_mask = labels == unique_cluster
         d = {}
         d["cluster_index"] = cluster_index
-        d["Kd (mM)"] = mean_params[unique_cluster]
-        d["error (mM)"] = std_params[unique_cluster]
+        d["Kd (mM)"] = median_Kds[unique_cluster]
+        d["Kd_lower (mM)"] = lb_Kds[unique_cluster]
+        d["Kd_upper (mM)"] = ub_Kds[unique_cluster]
         d["indicies"] = residueIndexes[cluster_mask].tolist()
         cluster_data.append(d)
     #
     df = pd.DataFrame(cluster_data)
-    df.to_excel(output_directory/"clusters_data.xlsx",index=False)
+    df.to_excel(output_directory/f"{name_stem}clusters_data.xlsx",index=False)
+#
 
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--titration_data',required=True,type=Path,help='tiration data, an excel file of peak positions')
+    parser.add_argument('--pdb_file',required=True,type=Path,help='pdb file')
+    parser.add_argument('--chain',required=True,type=str,help='Chain code')
+    parser.add_argument('--offset_index',default=0,type=int,help='Value to add to the assigned residue index to match the pdb indexing')
+    parser.add_argument("--protein_concentration", required=True, type=float,help="Protein concentration")
+    parser.add_argument("--spectral_dimensions", required=True, nargs='+', type=str,help="Spectral dimensions present e.g. w1 w2")
+    parser.add_argument( "--error", required=True, type=float,nargs='+',help="error (ppm) for each indicated spectral dimension")
+    parser.add_argument("--output_directory", required=True, type=Path,help="Output directory")
+    parser.add_argument("--name_stem", required=True, type=str, help="Name stem")
+    parser = parser.parse_args()
+
+
+    ClusterTitrationCurves(parser.titration_data,parser.pdb_file,parser.chain,parser.offset_index,
+                           parser.protein_concentration,parser.spectral_dimensions,parser.error,parser.output_directory,parser.name_stem)
 
 
     print("Done")
