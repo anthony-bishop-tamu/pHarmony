@@ -40,7 +40,7 @@ if __name__ == '__main__':
         if args.skip_if_done and peakPositionsFile.is_file() and clusterPymolFile.is_file() and clusterTitrationCurves.is_file():
             continue
 
-        entries = experiment_spreadsheet[experiment_spreadsheet['ChemID'] == chemID]
+        entries = experiment_spreadsheet[experiment_spreadsheet['ChemID'] == chemID].sort_values(by='CompoundFinalAqueousConcentration (mM)')
         control_entry = controlEntries.iloc[[0]]
         assert(control_entry['CompoundFinalAqueousConcentration (mM)'].iloc[0] == 0)
 

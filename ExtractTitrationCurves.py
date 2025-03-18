@@ -32,7 +32,8 @@ def ExtractTitrationCurves(assignment_peak_list: Path, titration_peak_lists: lis
     if titration_concentrations[0] != 0.0:
         print("First concentration must the control (0.0 mM)")
         assert False
-
+    PeakMatchingStatistics= output_directory / f"{name_stem}_statistics.xlsx"
+    statistics_df = pd.DataFrame()
     peakLists = []
     fixedError = error
     for i in range(len(titration_concentrations)):
@@ -41,13 +42,28 @@ def ExtractTitrationCurves(assignment_peak_list: Path, titration_peak_lists: lis
                                                                                fixedError=fixedError)
             reference_peak_positions, reference_peaks = getPeakPositionsFromFile(titration_peak_lists[i],
                                                                                  spectral_dimensions, fixedError=fixedError)
+
+            statistics_df['Assignment'] = assigned_peaks['Assignment']
+
             matchingDistribution, matchingProbabilities, distances_normalized_squared, reference_offset = MatchPeaks(
                 assigned_peak_positions, reference_peak_positions, expected_fraction_missing=0.02,
                 expected_fraction_csp=0.05, fixedOffset=torch.tensor([0, 0], dtype=torch.float))
             value, index = torch.max(matchingProbabilities, dim=1)
 
-            reference_peaks.iloc[index[value > 0.9].numpy(), 0] = assigned_peaks.iloc[
-                torch.arange(len(assigned_peaks))[value > 0.9].numpy(), 0].astype(str).reset_index(drop=True)
+            matched_mask = (value > 0.9).numpy().astype(bool)
+            missing_mask = (matchingProbabilities.sum(dim=1) <= 0.90).numpy().astype(bool)
+            ambiguous_mask = ~matched_mask & ~missing_mask
+            statistics_df[titration_concentrations[i]] = ""
+            statistics_df.loc[matched_mask,titration_concentrations[i]] = "M"
+            statistics_df.loc[missing_mask,titration_concentrations[i]] = "I"
+            statistics_df.loc[ambiguous_mask,titration_concentrations[i]] = "A"
+
+            survived_mask_indexes = torch.arange(len(assigned_peaks))[matched_mask].numpy()
+
+            reference_peaks.iloc[index[matched_mask].numpy(), 0] = assigned_peaks.iloc[
+                torch.arange(len(assigned_peaks))[matched_mask].numpy(), 0].astype(str).reset_index(drop=True)
+
+
             peak_mask = reference_peaks['Assignment'] != "?-?"
             reference_peaks = reference_peaks[peak_mask].copy()
             reference_peak_positions = reference_peak_positions[peak_mask.to_numpy()]
@@ -65,6 +81,20 @@ def ExtractTitrationCurves(assignment_peak_list: Path, titration_peak_lists: lis
                 expected_fraction_csp=0.05, fixedOffset=torch.tensor([ 0 for i in range(len(spectral_dimensions))], dtype=torch.float))
 
             value, index = torch.max(matchingProbabilities, dim=1)
+
+
+            newSeries = pd.Series("",index=survived_mask_indexes)
+            matched_mask = (value > 0.9).numpy().astype(bool)
+
+            missing_mask = (matchingProbabilities.sum(dim=1) <= 0.90).numpy().astype(bool)
+            ambiguous_mask = ~matched_mask & ~missing_mask
+            newSeries[matched_mask] = "M"
+            newSeries[missing_mask] = "I"
+            newSeries[ambiguous_mask] = "A"
+            statistics_df[titration_concentrations[i]] = newSeries
+
+            survived_mask_indexes = survived_mask_indexes[matched_mask]
+
             target_peaks.iloc[index[value > 0.9].numpy(), 0] = reference_peaks.iloc[
                 torch.arange(len(reference_peaks))[value > 0.9].numpy(), 0].astype(str).to_numpy()
             peak_mask = target_peaks['Assignment'] != "?-?"
@@ -78,6 +108,7 @@ def ExtractTitrationCurves(assignment_peak_list: Path, titration_peak_lists: lis
             target_peaks.to_csv(output_directory / name, index=False, sep='\t')
     #
     peakPositionFile = output_directory / f"{name_stem}_peakPositions.xlsx"
+    statistics_df.fillna("", inplace=True)
     with pd.ExcelWriter(peakPositionFile, engine="openpyxl") as writer:
         for peakList in peakLists:
             # add NaNs for missing peaks
@@ -85,6 +116,8 @@ def ExtractTitrationCurves(assignment_peak_list: Path, titration_peak_lists: lis
             merged_peakList = assigned_peaks[['Assignment']].merge(peakList[1], on='Assignment', how='left')
             merged_peakList.to_excel(writer, sheet_name=f"{peakList[0]}(mM)", index=False)
         #
+    with pd.ExcelWriter(PeakMatchingStatistics, engine="openpyxl") as writer:
+        statistics_df.to_excel(writer, index=False)
 #
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

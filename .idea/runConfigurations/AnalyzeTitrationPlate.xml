@@ -15,7 +15,7 @@
     <option name="ADD_SOURCE_ROOTS" value="true" />
     <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
     <option name="SCRIPT_NAME" value="$PROJECT_DIR$/AnalyzeTitrationPlate.py" />
-    <option name="PARAMETERS" value="--experiment_spreadsheet ab_IL1B_titration_plate_2_022725/ab_IL1B_titration_plate_2_022725_experiment_list.xlsx --assigned_peak_list ab_IL1B_titration_plate_1_022525/IL1B_manually_transferred_assignments_not_referenced.list --pdb_file ab_IL1B_titration_plate_1_022525/test_clustering/9ilb.pdb --chain A --spectral_dimensions w1 w2 --position_error 0.015 0.0015 --output_directory titration_plate_2_analysis --offset_index -1 --protein_concentration 5.0 --skip_peak_matching" />
+    <option name="PARAMETERS" value="--experiment_spreadsheet ab_IL1B_titration_plate_4_030725/ab_IL1B_titration_plate_4_030725_experiment_list.xlsx --assigned_peak_list ab_IL1B_titration_plate_1_022525/IL1B_manually_transferred_assignments_not_referenced.list --pdb_file ab_IL1B_titration_plate_1_022525/test_clustering/9ilb.pdb --chain A --spectral_dimensions w1 w2 --position_error 0.015 0.0015 --output_directory titration_plate_4_analysis_with40mM --protein_concentration 5.0 --offset_index -1" />
     <option name="SHOW_COMMAND_LINE" value="false" />
     <option name="EMULATE_TERMINAL" value="false" />
     <option name="MODULE_MODE" value="false" />
