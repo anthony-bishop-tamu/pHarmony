@@ -2,7 +2,9 @@ from scipy import optimize as opt
 import scipy
 import numpy as np
 import pandas as pd
-from sklearn.cluster import KMeans
+from sklearn.cluster import KMeans, SpectralClustering
+from scipy.sparse.csgraph import laplacian
+from scipy.sparse.linalg import eigsh
 from sklearn.metrics import silhouette_samples
 import argparse
 from pathlib import Path
@@ -27,22 +29,20 @@ def CSPBindingEquation(Kd: np.array, CSPsat: np.array, P: float, X: np.array):
 def minimization(params: np.array, X: np.array, CSP: np.array, P: float, error: np.array):
 
     n_kd = CSP.shape[0]
-    Kd = params[:n_kd].reshape((CSP.shape[0], 1))
+    log_Kd = params[:n_kd].reshape((CSP.shape[0], 1))
     CSPsat = params[n_kd:].reshape((CSP.shape[0], 1))
 
-    assert Kd.base is params
+    assert log_Kd.base is params
     assert CSPsat.base is params
 
 
-    residuals = np.square((CSP - CSPBindingEquation(Kd, CSPsat, P, X))/(math.sqrt(2.0)*error))
+    residuals = np.square((CSP - CSPBindingEquation(np.exp(log_Kd), CSPsat, P, X))/(math.sqrt(2.0)*error))
     sum = np.nansum(residuals)
     #print(sum)
     return sum
 #
 def minimization_labels(params: np.array, labels: np.array, X: np.array, CSP: np.array, P: float, error):
 
-    if labels.dtype is not np.dtype('int32'):
-        labels = labels.astype(int)
     n_csp_params = CSP.shape[0]
     n_clusters = params.shape[0] - n_csp_params
     all_params = np.zeros((CSP.shape[0]+n_csp_params,))
@@ -141,8 +141,7 @@ def calculateBIC(coordinates: np.array, centroids: np.array, labels: np.array):
     return BIC
 
 #
-def MonteCarloKds(positions: np.array, concentrations: np.array, protein_concentration: float, labels: np.array, params: np.array, error:np.array):
-    sample_size = 1000
+def MonteCarloKds(positions: np.array, concentrations: np.array, protein_concentration: float, labels: np.array, params: np.array, error:np.array,sample_size):
     error_adjusted_positions= scipy.stats.norm.rvs(loc=positions,scale=error[np.newaxis,np.newaxis,:],size=(sample_size,*positions.shape))
     scaling_factor = error/error[-1]
     error_adjusted_CSPs = calculateCSPS(error_adjusted_positions,scaling_factor)
@@ -182,52 +181,53 @@ def outputPML(residue_indexes:np.array, labels: np.array, Kds: np.array, Kd_erro
         mask = labels == cluster_i
         indexes = residue_indexes[mask].tolist()
         cluster_names.append(f"{cluster_i+1}_kd_{Kds[cluster_i]:.0f}_{Kd_error[cluster_i]:.0f}_mM")
-        print(f"select {cluster_names[-1]} , resid \"" + "+".join(map(str, indexes)) + " and (IL1B_obj or 8C3U_A)", file=outFile)
+        print(f"select {cluster_names[-1]} , resid " + "+".join(map(str, indexes)) + " and (IL1B_obj or 8C3U_A)", file=outFile)
         print(f"color {colors[cluster_i % len(colors)]}, {cluster_names[-1]}", file=outFile)
 
     #
 
     outFile.close()
-def calculateError(positions: np.array, position_error: np.array):
-    sample_size = 1000
-    error_adjusted_positions = scipy.stats.norm.rvs(loc=positions, scale=position_error[np.newaxis, np.newaxis, :],
-                                                    size=(sample_size, *positions.shape))
-    scaling_factor = position_error / position_error[-1]
-    error_adjusted_CSPs = calculateCSPS(error_adjusted_positions, scaling_factor)
-    return np.std(error_adjusted_CSPs,axis=0)
-def findOptimalKDs(CSPs: np.array, concentrations: np.array, csp_error: np.array, protein_concentration: float, nKDs: int):
-    labels = np.random.randint(0,nKDs,len(CSPs))
-    params = np.zeros((len(CSPs)+nKDs,))
-    params[:nKDs] = 1000
-    params[nKDs:] = 1.0
+def findOptimalKDs(positions:np.array, individual_Kds: np.array, concentrations: np.array, position_error: np.array, protein_concentration: float):
+    labels = np.array(range(positions.shape[0]))
+    params = np.zeros((2*positions.shape[0]))
+    params[:positions.shape[0]] = math.log(1000.0)
+    params[positions.shape[0]:] = 1.0
+    monte_params, error_adjusted_CSPs = MonteCarloKds(positions, concentrations, protein_concentration, labels, params,position_error,10000)
+    var_kD = np.var(monte_params[:,:positions.shape[0]], axis=0)
+    distance_matrix = np.sqrt(np.square(individual_Kds[:,np.newaxis] - individual_Kds[np.newaxis,:])/(var_kD[:,np.newaxis] + var_kD[np.newaxis,:]))
+    affinity_matrix = np.exp(-distance_matrix)
 
-    minimizer_kwargs = { "method": "Powell"}
+    max_clusters = 10
 
-    class Stepper:
-        def __init__(self, labels: np.array, step_size: int, nKDs: int):
-            self.labels = np.array(labels,dtype=int)
-            self.step_size = step_size
-            self.nKD = nKDs
-        def __call__(self, x):
-            idx = np.random.randint(0,len(self.labels),self.step_size)
-            x[idx] = np.random.randint(0,self.nKD,self.step_size)
-            return x
 
-    def callback(x,f,accepted):
-        print(f"{x} minimized to {f}: {bool(accepted)}")
+    CSPs = calculateCSPS(positions, position_error)
 
-    result = opt.basinhopping(
-        func=lambda labels: opt.minimize(minimization_labels, params, args=(labels, concentrations, CSPs, protein_concentration, csp_error), method='Powell').fun,
-        x0 = labels,
-        minimizer_kwargs=None,
-        take_step=Stepper(labels,1,nKDs),
-        niter=100,
-        callback=callback,
-        T=0.01,
+    BICs = np.zeros((max_clusters,))
+    label_list=[]
+    n = np.sum(CSPs != np.nan)
 
-    )
-    return result
-
+    for i in range(0,max_clusters):
+        if i == 0:
+            labels = np.zeros((positions.shape[0],),dtype=np.int32)
+            result = opt.minimize(minimization_labels, params, method="Powell", options={'maxiter': 100000}, args=(
+                labels, concentrations, CSPs, protein_concentration,
+                np.std(error_adjusted_CSPs, axis=0)))
+        else:
+            params = np.zeros((i+1+positions.shape[0],))
+            params[:i+1] = math.log(1000.0)
+            params[i+1:] = 1.0
+            clustering_object = SpectralClustering(n_clusters=i+1,affinity='precomputed',n_init=1000,verbose=True)
+            labels = clustering_object.fit_predict(affinity_matrix)
+            result = opt.minimize(minimization_labels, params, method="Powell", options={'maxiter': 100000}, args=(labels, concentrations, CSPs, protein_concentration,np.std(error_adjusted_CSPs,axis=0)))
+        #
+        BICs[i] = (i+1 + len(CSPs)) * math.log(n) + n * math.log(2 * math.pi) + n * math.log(result.fun / n) + n
+        print(f"Num Kds: {i+1}: BIC:{BICs[i]}")
+        label_list.append(labels)
+    #
+    min_idx = np.argmin(BICs)
+    labels = label_list[min_idx]
+    return labels, min_idx+1
+#
 def ClusterTitrationCurves(titration_data: Path, pdb_file: Path, chain: str, offset_index: int, protein_concentration: float, spectral_dimensions: list, error: list, output_directory:Path,name_stem:str ):
 
     output_directory.mkdir(exist_ok=True, parents=True)
@@ -262,9 +262,10 @@ def ClusterTitrationCurves(titration_data: Path, pdb_file: Path, chain: str, off
     coords = np.array(coords)
     CSPs = calculateCSPS(titration_data,error/error[-1])
     selected_rows = []
+    individual_Kds = []
     for i in range(0,len(residueIndexes)):
         params = np.zeros((2,))
-        params[0] = 1000
+        params[0] = math.log(1000)
         params[1] = np.nanmax(CSPs[i])
 
 
@@ -274,74 +275,37 @@ def ClusterTitrationCurves(titration_data: Path, pdb_file: Path, chain: str, off
         if not result.success:
             continue
         params = result.x
-        Kd = params[0]
+        Kd = math.exp(params[0])
         CSPsat = params[1]
         sse = result.fun
         residueIndex = residueIndexes[i]
         print(residueIndex, Kd , CSPsat, sse, CSPs[i].max())
         if Kd < 1000 and CSPsat > 0.02 and sse < 3 and np.nanmax(CSPs[i]) > 0.01:
             selected_rows.append(i)
+            individual_Kds.append(Kd)
     #
     if len(selected_rows) < 5:
         print("Too few residues selected: ")
         return
     #
     selected_rows = np.array(selected_rows)
+    individual_Kds = np.array(individual_Kds)
     coords = coords[selected_rows,:]
     titration_data = titration_data[selected_rows,:,:]
     residueIndexes = residueIndexes[selected_rows]
     CSPs = CSPs[selected_rows]
 
-
-    csp_error = calculateError(titration_data,error)
-
-
-    KdStats = []
-    for i in range(1,5):
-        result = findOptimalKDs(CSPs,concentrations,csp_error,protein_concentration,i)
+    Kd_labels, nKds = findOptimalKDs(titration_data, np.log(individual_Kds), concentrations, error, protein_concentration)
 
 
-        n = np.sum(CSPs != np.nan)
-
-        BIC = (i+len(CSPs))*math.log(n) + n*math.log(2*math.pi) + n*math.log(result.fun/n) +n
-        print(f"Optimal for {i} KDs: {result.x}: {result.fun} {BIC}")
-        KdStats.append((i,result.x,result.fun,BIC))
-    #
-
-    labels_dict = {}
-
-
-    for i in range(1,min(20,len(selected_rows))):
-        if i == 1:
-            centroids = np.mean(coords, axis=0)[np.newaxis,:]
-            labels = np.zeros(len(coords),dtype=int)
-        else:
-            clustering = KMeans(n_clusters=i,n_init=1000).fit(coords)
-            labels = clustering.labels_
-            centroids = clustering.cluster_centers_
-        #
-        BIC = calculateBIC(coords, centroids, labels)
-        print(f"Number of clusters: {i}, BIC: {BIC}")
-        labels_dict[i] = (labels, BIC)
-    #
-    minimum = 1E100
-    min_arg = 0
-    for i in labels_dict.keys():
-        labels = labels_dict[i][0]
-        BIC = labels_dict[i][1]
-        if BIC < minimum:
-            min_arg = i
-            minimum = BIC
-
-    labels = labels_dict[min_arg][0]
+    labels = Kd_labels
     n_clusters = len(np.unique(labels))
     print(f"Number of clusters: {n_clusters}")
     params = np.zeros((n_clusters+len(labels),))
-    params[:n_clusters] = 1000.0
+    params[:n_clusters] = math.log(1000.0)
     params[n_clusters:] = 0.1
 
     result = opt.minimize(minimization_labels, params, method="Powell", options={'maxiter': 100000}, args=(labels, concentrations, CSPs, protein_concentration,np.array([0.003])))
-    print(result.x)
     assert(result.success)
     '''profiler = LineProfiler()
     profiler.add_function(MonteCarloKds)
@@ -349,7 +313,8 @@ def ClusterTitrationCurves(titration_data: Path, pdb_file: Path, chain: str, off
     profiler.add_function(minimization)
     profiler.add_function(PositionBindingEquation)
     profiler.enable()'''
-    monte_params, error_adjusted_CSPs = MonteCarloKds(titration_data, concentrations, protein_concentration, labels,params,error)
+    monte_params, error_adjusted_CSPs = MonteCarloKds(titration_data, concentrations, protein_concentration, labels,params,error,1000)
+    monte_params[:,:n_clusters] = np.exp(monte_params[:,:n_clusters])
     '''profiler.disable()
     profiler.print_stats()'''
     top_percentile = np.quantile(error_adjusted_CSPs,0.95, axis=0) - np.median(error_adjusted_CSPs,axis=0)
@@ -360,9 +325,10 @@ def ClusterTitrationCurves(titration_data: Path, pdb_file: Path, chain: str, off
 
     plot_file = output_directory/f"{name_stem}_ClusterTitrationCurves.png"
 
-    median_Kds = np.median(monte_params, axis=0)[:n_clusters]
-    lb_Kds = np.quantile(monte_params, 0.05, axis=0)[:n_clusters]
-    ub_Kds = np.quantile(monte_params, 0.95, axis=0)[:n_clusters]
+    monte_Kds = monte_params[:,:n_clusters]
+    median_Kds = np.median(monte_Kds, axis=0)
+    lb_Kds = np.quantile(monte_Kds, 0.05, axis=0)
+    ub_Kds = np.quantile(monte_Kds, 0.95, axis=0)
 
     fig.savefig(plot_file)
     plt.close(fig)
