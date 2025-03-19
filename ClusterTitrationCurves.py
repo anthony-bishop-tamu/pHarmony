@@ -198,35 +198,23 @@ def findOptimalKDs(positions:np.array, individual_Kds: np.array, concentrations:
     affinity_matrix = np.exp(-distance_matrix)
 
     max_clusters = 10
+    L = laplacian(affinity_matrix, normed=True)
 
+    eigvals, eigvecs = eigsh(L, k=max_clusters, which='SM')
+    eigvals = np.sort(eigvals)
 
-    CSPs = calculateCSPS(positions, position_error)
+    gaps = np.diff(eigvals)
 
-    BICs = np.zeros((max_clusters,))
-    label_list=[]
-    n = np.sum(CSPs != np.nan)
+    optimal_k = np.argmax(gaps)+1
 
-    for i in range(0,max_clusters):
-        if i == 0:
-            labels = np.zeros((positions.shape[0],),dtype=np.int32)
-            result = opt.minimize(minimization_labels, params, method="Powell", options={'maxiter': 100000}, args=(
-                labels, concentrations, CSPs, protein_concentration,
-                np.std(error_adjusted_CSPs, axis=0)))
-        else:
-            params = np.zeros((i+1+positions.shape[0],))
-            params[:i+1] = math.log(1000.0)
-            params[i+1:] = 1.0
-            clustering_object = SpectralClustering(n_clusters=i+1,affinity='precomputed',n_init=1000,verbose=True)
-            labels = clustering_object.fit_predict(affinity_matrix)
-            result = opt.minimize(minimization_labels, params, method="Powell", options={'maxiter': 100000}, args=(labels, concentrations, CSPs, protein_concentration,np.std(error_adjusted_CSPs,axis=0)))
-        #
-        BICs[i] = (i+1 + len(CSPs)) * math.log(n) + n * math.log(2 * math.pi) + n * math.log(result.fun / n) + n
-        print(f"Num Kds: {i+1}: BIC:{BICs[i]}")
-        label_list.append(labels)
+    if optimal_k == 1:
+        labels = np.zeros((positions.shape[0],),dtype=np.int32)
+    else:
+        clustering_object = SpectralClustering(n_clusters=optimal_k,affinity='precomputed',n_init=1000,verbose=True)
+        labels = clustering_object.fit_predict(affinity_matrix)
     #
-    min_idx = np.argmin(BICs)
-    labels = label_list[min_idx]
-    return labels, min_idx+1
+    print("Optimal number of clusters: ", optimal_k)
+    return labels, optimal_k
 #
 def ClusterTitrationCurves(titration_data: Path, pdb_file: Path, chain: str, offset_index: int, protein_concentration: float, spectral_dimensions: list, error: list, output_directory:Path,name_stem:str ):
 
