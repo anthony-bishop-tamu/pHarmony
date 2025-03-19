@@ -216,16 +216,21 @@ def findOptimalKDs(CSPs: np.array, concentrations: np.array, csp_error: np.array
     def callback(x,f,accepted):
         print(f"{x} minimized to {f}: {bool(accepted)}")
 
+    niter = 100
+    if nKDs == 1:
+        niter = 1
+
     result = opt.basinhopping(
         func=lambda labels: opt.minimize(minimization_labels, params, args=(labels, concentrations, CSPs, protein_concentration, csp_error), method='Powell').fun,
         x0 = labels,
         minimizer_kwargs=None,
         take_step=Stepper(labels,1,nKDs),
-        niter=100,
+        niter=niter,
         callback=callback,
         T=0.01,
 
     )
+    result.x = result.x.astype(int)
     return result
 
 def ClusterTitrationCurves(titration_data: Path, pdb_file: Path, chain: str, offset_index: int, protein_concentration: float, spectral_dimensions: list, error: list, output_directory:Path,name_stem:str ):
@@ -307,33 +312,16 @@ def ClusterTitrationCurves(titration_data: Path, pdb_file: Path, chain: str, off
         print(f"Optimal for {i} KDs: {result.x}: {result.fun} {BIC}")
         KdStats.append((i,result.x,result.fun,BIC))
     #
-
-    labels_dict = {}
-
-
-    for i in range(1,min(20,len(selected_rows))):
-        if i == 1:
-            centroids = np.mean(coords, axis=0)[np.newaxis,:]
-            labels = np.zeros(len(coords),dtype=int)
-        else:
-            clustering = KMeans(n_clusters=i,n_init=1000).fit(coords)
-            labels = clustering.labels_
-            centroids = clustering.cluster_centers_
-        #
-        BIC = calculateBIC(coords, centroids, labels)
-        print(f"Number of clusters: {i}, BIC: {BIC}")
-        labels_dict[i] = (labels, BIC)
-    #
-    minimum = 1E100
+    BIC_min = 9E100
     min_arg = 0
-    for i in labels_dict.keys():
-        labels = labels_dict[i][0]
-        BIC = labels_dict[i][1]
-        if BIC < minimum:
+    for i in range(len(KdStats)):
+        if KdStats[i][3] < BIC_min:
             min_arg = i
-            minimum = BIC
+            BIC_min = KdStats[i][3]
+    #
 
-    labels = labels_dict[min_arg][0]
+
+    labels = KdStats[min_arg][1]
     n_clusters = len(np.unique(labels))
     print(f"Number of clusters: {n_clusters}")
     params = np.zeros((n_clusters+len(labels),))
