@@ -41,7 +41,8 @@ def minimization(params: np.array, X: np.array, CSP: np.array, P: float, error: 
 #
 def minimization_labels(params: np.array, labels: np.array, X: np.array, CSP: np.array, P: float, error):
 
-
+    if labels.dtype is not np.dtype('int32'):
+        labels = labels.astype(int)
     n_csp_params = CSP.shape[0]
     n_clusters = params.shape[0] - n_csp_params
     all_params = np.zeros((CSP.shape[0]+n_csp_params,))
@@ -187,6 +188,46 @@ def outputPML(residue_indexes:np.array, labels: np.array, Kds: np.array, Kd_erro
     #
 
     outFile.close()
+def calculateError(positions: np.array, position_error: np.array):
+    sample_size = 1000
+    error_adjusted_positions = scipy.stats.norm.rvs(loc=positions, scale=position_error[np.newaxis, np.newaxis, :],
+                                                    size=(sample_size, *positions.shape))
+    scaling_factor = position_error / position_error[-1]
+    error_adjusted_CSPs = calculateCSPS(error_adjusted_positions, scaling_factor)
+    return np.std(error_adjusted_CSPs,axis=0)
+def findOptimalKDs(CSPs: np.array, concentrations: np.array, csp_error: np.array, protein_concentration: float, nKDs: int):
+    labels = np.random.randint(0,nKDs,len(CSPs))
+    params = np.zeros((len(CSPs)+nKDs,))
+    params[:nKDs] = 1000
+    params[nKDs:] = 1.0
+
+    minimizer_kwargs = { "method": "Powell"}
+
+    class Stepper:
+        def __init__(self, labels: np.array, step_size: int, nKDs: int):
+            self.labels = np.array(labels,dtype=int)
+            self.step_size = step_size
+            self.nKD = nKDs
+        def __call__(self, x):
+            idx = np.random.randint(0,len(self.labels),self.step_size)
+            x[idx] = np.random.randint(0,self.nKD,self.step_size)
+            return x
+
+    def callback(x,f,accepted):
+        print(f"{x} minimized to {f}: {bool(accepted)}")
+
+    result = opt.basinhopping(
+        func=lambda labels: opt.minimize(minimization_labels, params, args=(labels, concentrations, CSPs, protein_concentration, csp_error), method='Powell').fun,
+        x0 = labels,
+        minimizer_kwargs=None,
+        take_step=Stepper(labels,1,nKDs),
+        niter=100,
+        callback=callback,
+        T=0.01,
+
+    )
+    return result
+
 def ClusterTitrationCurves(titration_data: Path, pdb_file: Path, chain: str, offset_index: int, protein_concentration: float, spectral_dimensions: list, error: list, output_directory:Path,name_stem:str ):
 
     output_directory.mkdir(exist_ok=True, parents=True)
@@ -250,6 +291,22 @@ def ClusterTitrationCurves(titration_data: Path, pdb_file: Path, chain: str, off
     titration_data = titration_data[selected_rows,:,:]
     residueIndexes = residueIndexes[selected_rows]
     CSPs = CSPs[selected_rows]
+
+
+    csp_error = calculateError(titration_data,error)
+
+
+    KdStats = []
+    for i in range(1,5):
+        result = findOptimalKDs(CSPs,concentrations,csp_error,protein_concentration,i)
+
+
+        n = np.sum(CSPs != np.nan)
+
+        BIC = (i+len(CSPs))*math.log(n) + n*math.log(2*math.pi) + n*math.log(result.fun/n) +n
+        print(f"Optimal for {i} KDs: {result.x}: {result.fun} {BIC}")
+        KdStats.append((i,result.x,result.fun,BIC))
+    #
 
     labels_dict = {}
 
