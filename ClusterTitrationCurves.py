@@ -322,13 +322,48 @@ def ClusterTitrationCurves(titration_data: Path, pdb_file: Path, chain: str, off
 
 
     labels = KdStats[min_arg][1]
-    n_clusters = len(np.unique(labels))
-    print(f"Number of clusters: {n_clusters}")
-    params = np.zeros((n_clusters+len(labels),))
-    params[:n_clusters] = 1000.0
-    params[n_clusters:] = 0.1
+    n_Kd_clusters = len(np.unique(labels))
+    print(f"Number of Kd clusters: {n_Kd_clusters}")
 
-    result = opt.minimize(minimization_labels, params, method="Powell", options={'maxiter': 100000}, args=(labels, concentrations, CSPs, protein_concentration,np.array([0.003])))
+    final_cluster_labels = np.zeros((len(CSPs),),dtype=int)
+
+    n_final_clusters = 0
+    for i in range(n_Kd_clusters):
+        global_indexes = np.where(labels == i)[0]
+        kd_specific_CSPs = CSPs[global_indexes]
+        kd_specific_coords = coords[global_indexes,:]
+
+        max_kd_specific_clusters = min(20,len(kd_specific_CSPs))
+        BIC_array = np.zeros(max_kd_specific_clusters)
+        kd_specific_label_list =[]
+        for j in range(1,max_kd_specific_clusters+1):
+            if j == 1:
+                centroids = np.mean(coords,axis=0)[np.newaxis,:]
+                kd_specific_labels = np.zeros(len(coords),dtype=int)
+            else:
+                clustering = KMeans(n_clusters=j).fit(kd_specific_coords)
+                kd_specific_labels = clustering.labels_
+                centroids = clustering.cluster_centers_
+            #
+            BIC = calculateBIC(kd_specific_coords,centroids,kd_specific_labels)
+            BIC_array[j-1]=BIC
+            kd_specific_label_list.append(kd_specific_labels)
+        #
+        min_index = np.argmin(BIC_array)
+        kd_specific_labels = kd_specific_label_list[min_index]
+        final_cluster_labels[global_indexes] = n_final_clusters+kd_specific_labels
+        n_final_clusters += np.max(kd_specific_labels)+1
+    #
+    print(f"Total number of spatial clusters: {n_final_clusters}")
+
+
+
+
+    params = np.zeros((n_final_clusters+len(labels),))
+    params[:n_final_clusters] = 1000.0
+    params[n_final_clusters:] = 0.1
+
+    result = opt.minimize(minimization_labels, params, method="Powell", options={'maxiter': 100000}, args=(final_cluster_labels, concentrations, CSPs, protein_concentration,np.array([0.003])))
     print(result.x)
     assert(result.success)
     '''profiler = LineProfiler()
@@ -337,29 +372,29 @@ def ClusterTitrationCurves(titration_data: Path, pdb_file: Path, chain: str, off
     profiler.add_function(minimization)
     profiler.add_function(PositionBindingEquation)
     profiler.enable()'''
-    monte_params, error_adjusted_CSPs = MonteCarloKds(titration_data, concentrations, protein_concentration, labels,params,error)
+    monte_params, error_adjusted_CSPs = MonteCarloKds(titration_data, concentrations, protein_concentration,final_cluster_labels,params,error)
     '''profiler.disable()
     profiler.print_stats()'''
     top_percentile = np.quantile(error_adjusted_CSPs,0.95, axis=0) - np.median(error_adjusted_CSPs,axis=0)
     bottom_percentile = np.quantile(error_adjusted_CSPs,0.05, axis=0) - np.median(error_adjusted_CSPs,axis=0)
     plot_errors = np.abs(np.array([bottom_percentile, top_percentile]).transpose(1,0,2))
     #plot_errors = np.array([np.std(error_adjusted_CSPs, axis=0), np.std(error_adjusted_CSPs, axis=0)]).transpose(1,0,2)
-    fig= generateScaledFits(CSPs,concentrations,protein_concentration,residueIndexes,labels,monte_params,plot_errors,1.4*error[-1:])
+    fig= generateScaledFits(CSPs,concentrations,protein_concentration,residueIndexes,final_cluster_labels,monte_params,plot_errors,1.4*error[-1:])
 
     plot_file = output_directory/f"{name_stem}_ClusterTitrationCurves.png"
 
-    median_Kds = np.median(monte_params, axis=0)[:n_clusters]
-    lb_Kds = np.quantile(monte_params, 0.05, axis=0)[:n_clusters]
-    ub_Kds = np.quantile(monte_params, 0.95, axis=0)[:n_clusters]
+    median_Kds = np.median(monte_params, axis=0)[:n_final_clusters]
+    lb_Kds = np.quantile(monte_params, 0.05, axis=0)[:n_final_clusters]
+    ub_Kds = np.quantile(monte_params, 0.95, axis=0)[:n_final_clusters]
 
     fig.savefig(plot_file)
     plt.close(fig)
-    outputPML(residueIndexes,labels,median_Kds,(ub_Kds-lb_Kds)/2,output_directory/f"{name_stem}_clusters.pml")
-    unique_clusters = np.unique(labels)
+    outputPML(residueIndexes,final_cluster_labels,median_Kds,(ub_Kds-lb_Kds)/2,output_directory/f"{name_stem}_clusters.pml")
+    unique_clusters = np.unique(final_cluster_labels)
     cluster_data = [ ]
     for unique_cluster in unique_clusters:
         cluster_index = unique_cluster+1
-        cluster_mask = labels == unique_cluster
+        cluster_mask = final_cluster_labels == unique_cluster
         d = {}
         d["cluster_index"] = cluster_index
         d["Kd (mM)"] = median_Kds[unique_cluster]
