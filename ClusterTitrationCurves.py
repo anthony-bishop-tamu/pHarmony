@@ -281,7 +281,7 @@ def ClusterTitrationCurves(titration_data: Path, pdb_file: Path, chain: str, off
         kd_specific_CSPs = CSPs[global_indexes]
         kd_specific_coords = coords[global_indexes,:]
         if len(kd_specific_coords) > 1:
-            kd_specific_labels = MeanShift(cluster_all=True,bandwidth=12.0).fit_predict(kd_specific_coords)
+            kd_specific_labels = MeanShift(cluster_all=True,bandwidth=10.0).fit_predict(kd_specific_coords)
             final_cluster_labels[global_indexes] = n_final_clusters+kd_specific_labels
             n_final_clusters += np.max(kd_specific_labels)+1
         else:
