@@ -2,7 +2,7 @@ from scipy import optimize as opt
 import scipy
 import numpy as np
 import pandas as pd
-from sklearn.cluster import KMeans
+from sklearn.cluster import KMeans, MeanShift, estimate_bandwidth
 from sklearn.mixture import GaussianMixture
 import argparse
 from pathlib import Path
@@ -169,7 +169,7 @@ def outputPML(residue_indexes:np.array, labels: np.array, Kds: np.array, Kd_erro
         mask = labels == cluster_i
         indexes = residue_indexes[mask].tolist()
         cluster_names.append(f"{cluster_i+1}_kd_{Kds[cluster_i]:.0f}_{Kd_error[cluster_i]:.0f}_mM")
-        print(f"select {cluster_names[-1]} , resid \"" + "+".join(map(str, indexes)) + " and (IL1B_obj or 8C3U_A)", file=outFile)
+        print(f"select {cluster_names[-1]} , resid " + "+".join(map(str, indexes)) + " and (IL1B_obj or 8C3U_A)", file=outFile)
         print(f"color {colors[cluster_i % len(colors)]}, {cluster_names[-1]}", file=outFile)
 
     #
@@ -274,24 +274,14 @@ def ClusterTitrationCurves(titration_data: Path, pdb_file: Path, chain: str, off
 
     final_cluster_labels = np.zeros((len(CSPs),),dtype=int)
 
+
     n_final_clusters = 0
     for i in range(n_Kd_clusters):
         global_indexes = np.where(labels == i)[0]
         kd_specific_CSPs = CSPs[global_indexes]
         kd_specific_coords = coords[global_indexes,:]
         if len(kd_specific_coords) > 1:
-            max_kd_specific_clusters = min(20,len(kd_specific_CSPs))
-            BIC_array = np.zeros(max_kd_specific_clusters)
-            kd_specific_label_list =[]
-            for j in range(1,max_kd_specific_clusters+1):
-                fitted_mixture = GaussianMixture(n_components=j,covariance_type='tied',init_params='k-means++',n_init=1000).fit(kd_specific_coords)
-                kd_specific_labels = fitted_mixture.predict(kd_specific_coords)
-                BIC = fitted_mixture.bic(kd_specific_coords)
-                BIC_array[j-1]=BIC
-                kd_specific_label_list.append(kd_specific_labels)
-            #
-            min_index = np.argmin(BIC_array)
-            kd_specific_labels = kd_specific_label_list[min_index]
+            kd_specific_labels = MeanShift(cluster_all=True,bandwidth=12.0).fit_predict(kd_specific_coords)
             final_cluster_labels[global_indexes] = n_final_clusters+kd_specific_labels
             n_final_clusters += np.max(kd_specific_labels)+1
         else:
