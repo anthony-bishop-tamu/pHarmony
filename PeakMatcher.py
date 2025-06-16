@@ -54,7 +54,7 @@ def initalizeAllComponents(distances):
     csp_weights = initial_weights[:,:,1]
     no_matching_weights = initial_weights[:,:,2]
 
-    csp_distribution = Frechet(alpha=torch.tensor([2.0],dtype=torch.float64),
+    csp_distribution = Frechet(alpha=torch.tensor([2.5],dtype=torch.float64),
                                      scale=torch.tensor([30], dtype=torch.float64))
 
     non_matching_distribution = UniformDistanceSquared(dim=torch.tensor([2.0],dtype=torch.float64),
@@ -159,12 +159,13 @@ def EM_minimization_function(samples, dist: CSPDetectionDistribution,
 
     #positionProb = calculatePositionProb(samples, dist._distances.shape)
 
-    scale_regularization = torch.relu((0 - dist.csp_distribution.scale)*10)**6
-    alpha_regularization = torch.relu((1.05- dist.csp_distribution.alpha)*10)**6
+    scale_regularization = torch.relu((1 - dist.csp_distribution.scale)*10)**6
+    alpha_regularization = torch.relu((2.05- dist.csp_distribution.alpha)*10)**6
     median_regularization = torch.relu((5 - dist.csp_distribution.mode())*10)**6
     quantile_regularization = torch.relu((3 - dist.csp_distribution.quantile(torch.tensor([0.001])))*10)**6
     if dist.csp_distribution.alpha.item() > 2:
-        variance_regularization = torch.relu((10-dist.csp_distribution.variance())*10)**6
+        variance_regularization = torch.relu((1000-dist.csp_distribution.variance())*10)**6
+        #variance_regularization += torch.relu(dist.csp_distribution.variance()-10000)/10000
     else:
         variance_regularization = 0
 
@@ -257,7 +258,7 @@ def maximization(samples: tuple,
         #    csp_distribution.alpha.clamp_(min=1.0)
         if i % 1 == 0:
             print(f"Step {i} Loss: ", loss.item(), prevLoss-loss.item(), csp_distribution.alpha.item(), csp_distribution.scale.item(),
-              csp_distribution.alpha.grad.item(), csp_distribution.scale.grad.item(), optimizer.param_groups[0]['lr'])
+              csp_distribution.alpha.grad.item(), csp_distribution.scale.grad.item(), optimizer.param_groups[0]['lr'], f"{csp_distribution.variance()}")
         #
         if not (torch.tensor([csp_distribution.alpha,csp_distribution.scale,csp_distribution.alpha.grad,csp_distribution.scale.grad]).isfinite().all() and
             csp_distribution.alpha.item() > 0 and csp_distribution.scale.item() > 0 and prevLoss-loss.item() >= -1E-3):
@@ -463,7 +464,7 @@ def determineSampleSize(startingSample,dist):
     sample1 = startingSample
     sample2 = dist.sample((size,))
     print(f"Validating Sample Size: {size} ")
-    maxTries = 10
+    maxTries = 4
     i = 1
     while not validateSufficentSampling(sample1,sample2,dist.distances.shape) and i < maxTries:
         size *= 2
