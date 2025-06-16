@@ -94,8 +94,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
         row_decision_matrix = self._base_row_decision_probabilities.detach()
 
-
-
+        #row_log_evidence[...] = 0
         row_probs = (row_log_evidence-row_log_evidence.logsumexp(dim=-1,keepdim=True)).exp()
 
         #prob_tensor = availableRows.type(torch.float64)
@@ -107,6 +106,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
         with record_function("Column_Sampling"):
             probabilities = row_decision_matrix[sampled_rows,:]*availableCols
+            probabilities /= probabilities.sum(dim=-1,keepdim=True)
             matched_columns = torch.multinomial(probabilities,1,replacement=True).type(torch.int32).squeeze()
 
         no_matched_columns = matched_columns >= self._distances.shape[1]
@@ -138,38 +138,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
 
 #
-    def _stratified_resample(self,
-            sample: torch.Tensor,
-            sample_weights: torch.Tensor,
-            availableRows: torch.Tensor,
-            availableCols: torch.Tensor,
-            decision_log,
-            force_resample=False):
-        # Step 0: Convert log-weights to normalized linear weights
-        normalized_weights = (sample_weights - sample_weights.logsumexp(dim=-1, keepdim=True)).exp()
-        ess = 1.0 / torch.pow(normalized_weights, 2).sum()
-        nsamples = sample.shape[0]
 
-        if ess < nsamples * 0.1 or force_resample:
-            # Step 1: Stratified uniform samples
-            # Shape: (nsamples,)
-            u = (torch.arange(nsamples, dtype=sample_weights.dtype, device=sample_weights.device) +
-                 torch.rand(nsamples, dtype=sample_weights.dtype, device=sample_weights.device)) / nsamples
-
-            # Step 2: CDF of normalized weights
-            cumulative_sum = torch.cumsum(normalized_weights, dim=0)
-
-            # Step 3: Map uniform samples to particle indices
-            indices = torch.searchsorted(cumulative_sum, u).clamp(min=0, max=nsamples - 1)
-
-            # Step 4: Resample all state tensors (ensure shapes are compatible)
-            sample.copy_(sample[indices])
-            availableRows.copy_(availableRows[indices])
-            availableCols.copy_(availableCols[indices])
-            decision_log.copy_(decision_log[indices])
-
-            # Step 5: Reset weights (any equal log-weight is fine)
-            sample_weights.fill_(0.0)  # log(1.0)
     def _resample(self, sample: torch.Tensor,
                   sample_weights: torch.Tensor,
                   row_log_evidence: torch.Tensor,
@@ -181,6 +150,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         normalized_weights = (sample_weights - sample_weights.logsumexp(dim=-1, keepdim=True)).exp()
         ess = 1.0/torch.pow(normalized_weights,2).sum()
         nsamples = np.prod(sample.shape[0:-1])
+        #print(f"ESS ratio:, {ess/sample_weights.shape[0]:0.3f}")
         if ess < nsamples*0.1 or force_resample:
             # Step 1: Create systematic positions
             positions = (torch.arange(nsamples, dtype=sample_weights.dtype, device=sample_weights.device) +

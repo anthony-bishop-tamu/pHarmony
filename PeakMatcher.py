@@ -464,7 +464,7 @@ def determineSampleSize(startingSample,dist):
     sample1 = startingSample
     sample2 = dist.sample((size,))
     print(f"Validating Sample Size: {size} ")
-    maxTries = 4
+    maxTries = 6
     i = 1
     while not validateSufficentSampling(sample1,sample2,dist.distances.shape) and i < maxTries:
         size *= 2
