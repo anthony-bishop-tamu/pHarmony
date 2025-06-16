@@ -87,7 +87,6 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                             availableRows: torch.tensor,
                             availableCols: torch.tensor,
                             row_log_evidence: torch.tensor,
-                            row_entropy: torch.tensor,
                             sample_weights: torch.tensor,
                             decision_log: torch.tensor,
                             decision_counter: int):
@@ -95,17 +94,15 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
         row_decision_matrix = self._base_row_decision_probabilities.detach()
 
-        row_probs = row_log_evidence - row_entropy
-        row_probs = (row_probs - row_probs.logsumexp(dim=-1,keepdim=True)).exp()
-
         #row_log_evidence[...] = 0
-        #row_probs = (row_log_evidence-row_log_evidence.logsumexp(dim=-1,keepdim=True)).exp()
+        alpha = 1000
+        row_log_evidence_alpha = row_log_evidence*alpha
 
         #prob_tensor = availableRows.type(torch.float64)
         #row_index_list = torch.nonzero(availableRows.type(torch.float64), as_tuple=True)[1].reshape(sample.shape[0],-1)
         with record_function("Row_Sampling"):
-            row_probs = row_probs*availableRows
-            row_probs /= row_probs.sum(dim=-1, keepdim=True)
+            row_log_evidence_alpha[~availableRows] = -torch.inf
+            row_probs = (row_log_evidence_alpha - row_log_evidence_alpha.logsumexp(dim=-1,keepdim=True)).exp()
             sampled_rows = torch.multinomial(row_probs,num_samples=1,replacement=True).type(torch.int32).squeeze(1)
             #print(sampled_rows.unique().shape)
             #sampled_rows = row_index_list[torch.arange(sample.shape[0]),sampled_rows]
@@ -137,17 +134,10 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         logits_to_remove = self._base_row_decision_likelihoods_unnormalized[:,matched_columns].transpose(-1,-2)
         delta = row_log_evidence-logits_to_remove
         delta [ delta < 0 ] = 0
-        new_row_log_evidence = logits_to_remove + (torch.expm1(delta)).log()
-        new_row_log_evidence[sample_indicies,sampled_rows] = -torch.inf
-
-        logits_to_remove = self._base_row_decision_likelihoods[:,matched_columns].transpose(-1,-2)
-        new_row_entropies = -(-row_entropy - logits_to_remove*logits_to_remove.exp())
-
-        assert not new_row_log_evidence.isnan().any()
-        assert not new_row_entropies.isnan().any()
-
-        row_log_evidence[sample_indicies[~no_matched_columns],...] = new_row_log_evidence[sample_indicies[~no_matched_columns],...]
-        row_entropy[...] = new_row_entropies
+        new = logits_to_remove + (torch.expm1(delta)).log()
+        new[sample_indicies,sampled_rows] = -torch.inf
+        assert not new.isnan().any()
+        row_log_evidence[sample_indicies[~no_matched_columns],...] = new[sample_indicies[~no_matched_columns],...]
 
 
 #
@@ -155,7 +145,6 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
     def _resample(self, sample: torch.Tensor,
                   sample_weights: torch.Tensor,
                   row_log_evidence: torch.Tensor,
-                  row_entropy: torch.Tensor,
                   availableRows: torch.Tensor,
                   availableCols: torch.Tensor,
                   decision_log,
@@ -165,7 +154,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         ess = 1.0/torch.pow(normalized_weights,2).sum()
         nsamples = np.prod(sample.shape[0:-1])
         #print(f"ESS ratio:, {ess/sample_weights.shape[0]:0.3f}")
-        if ess < nsamples*0.5 or force_resample:
+        if ess < nsamples*0.1 or force_resample:
             # Step 1: Create systematic positions
             positions = (torch.arange(nsamples, dtype=sample_weights.dtype, device=sample_weights.device) +
                          torch.rand(1,dtype=sample_weights.dtype,device=sample_weights.device)) / nsamples
@@ -180,7 +169,6 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
             availableRows[...,:] =availableRows[indices,:]
             availableCols[...,:] =availableCols[indices,:]
             row_log_evidence[...,:] =row_log_evidence[indices,:]
-            row_entropy[...,:] =row_entropy[indices,:]
             decision_log[...,...] =decision_log[indices,...]
         else:
             return
@@ -196,15 +184,11 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         decision_counter = 0
         row_log_evidence = self._base_row_decision_likelihoods_unnormalized.logsumexp(dim=-1)
         row_log_evidence = torch.where(availableRows, row_log_evidence.unsqueeze(0), -torch.inf)
-        row_entropy = -self._base_row_decision_likelihoods*self._base_row_decision_probabilities
-        row_entropy = torch.where(self._base_row_decision_probabilities > 0, row_entropy, 0).sum(dim=-1)
-        row_entropy = torch.where(availableRows,row_entropy.unsqueeze(0),torch.nan)
-        assert not row_entropy.isnan().any()
         while availableRows.any():
-            self.__getNextInSequence(sample, sample_indexes, availableRows, availableCols, row_log_evidence, row_entropy, sample_weights,decision_log,decision_counter)
-            self._resample(sample, sample_weights, row_log_evidence, row_entropy, availableRows,availableCols,decision_log)
+            self.__getNextInSequence(sample, sample_indexes, availableRows, availableCols, row_log_evidence, sample_weights,decision_log,decision_counter)
+            self._resample(sample, sample_weights, row_log_evidence, availableRows,availableCols,decision_log)
             decision_counter += 1
-        self._resample(sample, sample_weights, row_log_evidence, row_entropy, availableRows,availableCols,decision_log,True)
+        self._resample(sample, sample_weights, row_log_evidence, availableRows,availableCols,decision_log,True)
         #assert torch.abs(self.log_prob(sample) - partial_log_likelihood.sum()) <= 1
         return sample
 
