@@ -18,6 +18,8 @@ dependencies = [
 [tool.setuptools_scm]
 version_scheme = "guess-next-dev"
 local_scheme = "node-and-date"
+tag_regex = "^v(?P<version>\\d+\\.\\d+\\.\\d+)$"
+root = "."
 
 [project.scripts]
 PeakMatcher = "PeakMatcher.PeakMatcher:main"

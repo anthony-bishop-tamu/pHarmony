@@ -1,6 +1,6 @@
 Metadata-Version: 2.1
 Name: PeakMatcher
-Version: 0.0.0
+Version: 0.6.3.dev0+g0f3850e.d20250617
 Summary: A description of your package
 Requires-Python: >=3.7
 Requires-Dist: numpy>=1.24.0
