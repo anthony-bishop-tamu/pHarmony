@@ -15,5 +15,9 @@ dependencies = [
     "scipy>=1.10",
 ]
 
+[tool.setuptools_scm]
+version_scheme = "guess-next-dev"
+local_scheme = "node-and-date"
+
 [project.scripts]
 PeakMatcher = "PeakMatcher.PeakMatcher:main"
