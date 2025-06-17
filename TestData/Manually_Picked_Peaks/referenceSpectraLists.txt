@@ -1,6 +1,0 @@
-/Users/anthonybishop/LaboratoryFiles/Programs/PeakMatcher/TestData/Manually_Picked_Peaks/IL1B_MixtureScreen_Reference_1.list
-/Users/anthonybishop/LaboratoryFiles/Programs/PeakMatcher/TestData/Manually_Picked_Peaks/IL1B_MixtureScreen_Reference_2.list
-/Users/anthonybishop/LaboratoryFiles/Programs/PeakMatcher/TestData/Manually_Picked_Peaks/IL1B_MixtureScreen_Reference_3.list
-/Users/anthonybishop/LaboratoryFiles/Programs/PeakMatcher/TestData/Manually_Picked_Peaks/IL1B_MixtureScreen_Reference_4.list
-/Users/anthonybishop/LaboratoryFiles/Programs/PeakMatcher/TestData/Manually_Picked_Peaks/IL1B_MixtureScreen_Reference_5.list
-/Users/anthonybishop/LaboratoryFiles/Programs/PeakMatcher/TestData/Manually_Picked_Peaks/IL1B_MixtureScreen_Reference_6.list

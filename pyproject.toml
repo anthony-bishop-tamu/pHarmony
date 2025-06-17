@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "PeakMatcher"
+dynamic = ["version"]
+description = "A description of your package"
+requires-python = ">=3.7"
+dependencies = [
+    "numpy>=1.24.0",
+    "pandas>=2.0 ",
+    "torch>=2.0",
+    "matplotlib>=3.2",
+    "scipy>=1.10",
+]
+
+[project.scripts]
+PeakMatcher = "PeakMatcher.PeakMatcher:main"

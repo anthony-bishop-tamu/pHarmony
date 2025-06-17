@@ -1,0 +1,2 @@
+[console_scripts]
+PeakMatcher = PeakMatcher.PeakMatcher:main
