@@ -5,7 +5,6 @@ venv/
 .env/
 
 # Ignore compiled Python files
-__pycache__/
 *.py[cod]
 
 # Ignore Jupyter Notebook checkpoints
@@ -21,3 +20,36 @@ Thumbs.db
 
 # Ignore OS and IDE metadata
 *.swp
+# Byte-compiled / optimized / DLL files
+*.so
+*.pyd
+*.dll
+
+# Virtual environments
+.venv/
+env/
+ENV/
+*.env
+*.venv
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+*.whl
+
+# setuptools_scm version file (if written to disk)
+PeakMatcher/_version.py
+
+# VS Code and JetBrains project files
+.vscode/
+.idea/
+
+# PyCharm and pytest cache
+*.cover
+.coverage
+.pytest_cache/
+.cache/
+
+#
