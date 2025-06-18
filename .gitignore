@@ -51,5 +51,6 @@ PeakMatcher/_version.py
 .coverage
 .pytest_cache/
 .cache/
+**/test_output/
 
 #

@@ -564,61 +564,71 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
 
     return dist, matching_probs.detach(), distances_squared_normalized,offset
 #
+def _standalone_match_peaks(reference_peak_list: Path,
+                            reference_cs_column_names: list,
+                            reference_peak_list_error: list,
+                            target_peak_list: Path,
+                            target_cs_column_names: list,
+                            target_peak_list_error: list,
+                            output_directory: Path,
+                            expected_fraction_csp: float,
+                            variance_scale_fraction_csp: float,
+                            expected_fraction_missing: float,
+                            variance_scale_fraction_missing: float,
+                            gradient_convergence: float,
+                            compute_reference_offset: bool,
+                            display_distributions: bool,
+                            confidence_cutoff: float):
 
-def main():
-    #torch.manual_seed(42)
     start_time = time.time()
-    args = parseArguments()
-    output_directory = args.output_directory
     output_directory = output_directory.resolve()
     output_directory.mkdir(exist_ok=True, parents=True)
-    display_distributions = args.display_distributions
 
-    reference_peak_positions, reference_peaks = getPeakPositionsFromFile(args.reference_peak_list,
-                                               args.reference_cs_column_names,
-                                               fixedError=args.reference_peak_list_error,)
-    target_peak_positions, target_peaks = getPeakPositionsFromFile(args.target_peak_list,
-                                            args.target_cs_column_names,
-                                            fixedError=args.target_peak_list_error)
+    reference_peak_positions, reference_peaks = getPeakPositionsFromFile(reference_peak_list,
+                                                                         reference_cs_column_names,
+                                                                         fixedError=reference_peak_list_error)
+    target_peak_positions, target_peaks = getPeakPositionsFromFile(target_peak_list,
+                                                                   target_cs_column_names,
+                                                                   fixedError=target_peak_list_error)
 
-    if args.compute_reference_offset:
-       offset = None
+    if compute_reference_offset:
+        offset = None
     else:
         offset = torch.zeros((reference_peak_positions.shape[-2],), dtype=torch.float64, requires_grad=True)
 
-    #with profile(activities=[ProfilerActivity.CPU]) as prof:
-    posteriorMatchingDistribution, matchingProbabilities, distances_squared_normalized,offset = MatchPeaks(reference_peak_positions,
-                                                                      target_peak_positions,
-                                                                      args.expected_fraction_csp,
-                                                                      args.variance_scale_fraction_csp,
-                                                                      args.expected_fraction_missing,
-                                                                      args.variance_scale_fraction_missing,
-                                                                      args.gradient_convergence,
-                                                                      offset,
-                                                                      sys.stdout)
+    # with profile(activities=[ProfilerActivity.CPU]) as prof:
+    posteriorMatchingDistribution, matchingProbabilities, distances_squared_normalized, offset = MatchPeaks(
+        reference_peak_positions,
+        target_peak_positions,
+        expected_fraction_csp,
+        variance_scale_fraction_csp,
+        expected_fraction_missing,
+        variance_scale_fraction_missing,
+        gradient_convergence,
+        offset,
+        sys.stdout)
 
-
-    name_stem = f"{args.reference_peak_list.name}_{args.target_peak_list.name}"
+    name_stem = f"{reference_peak_list.name}_{target_peak_list.name}"
     outputResults(matchingProbabilities.numpy(),
-                      posteriorMatchingDistribution.csp_posterior_probabilities.exp(),
-                  (reference_peaks,args.reference_cs_column_names),
-                   (target_peaks,args.target_cs_column_names),
-                      output_directory/f"{name_stem}_transferred.txt",
-                      output_directory/f"{name_stem}_transferred_HC.txt",
-                      output_directory/f"{name_stem}_transferred.list",
-                      output_directory/"Match_probabilities.csv",
-                      output_directory/"CSP_probabilities.csv",
-                      args.confidence_cutoff)
+                  posteriorMatchingDistribution.csp_posterior_probabilities.exp(),
+                  (reference_peaks, reference_cs_column_names),
+                  (target_peaks, target_cs_column_names),
+                  output_directory / f"{name_stem}_transferred.txt",
+                  output_directory / f"{name_stem}_transferred_HC.txt",
+                  output_directory / f"{name_stem}_transferred.list",
+                  output_directory / "Match_probabilities.csv",
+                  output_directory / "CSP_probabilities.csv",
+                  confidence_cutoff)
 
     print("Outputing plots")
     fig = buildPlot(matchingProbabilities,
-                  posteriorMatchingDistribution.csp_mixture_weights.exp().detach().cpu().numpy(),
-                  posteriorMatchingDistribution.no_csp_distribution,
-                  posteriorMatchingDistribution.csp_distribution,
-                  distances_squared_normalized.detach(),
-                  0.50)
+                    posteriorMatchingDistribution.csp_mixture_weights.exp().detach().cpu().numpy(),
+                    posteriorMatchingDistribution.no_csp_distribution,
+                    posteriorMatchingDistribution.csp_distribution,
+                    distances_squared_normalized.detach(),
+                    0.50)
     print(f"Output Directory: {output_directory}")
-    fig.savefig(output_directory/f"{name_stem}_fittedDistributions.png")
+    fig.savefig(output_directory / f"{name_stem}_fittedDistributions.png")
     if display_distributions:
         fig.show()
 
@@ -626,9 +636,29 @@ def main():
     print("Done")
     end_time = time.time()
     elapsed_time = end_time - start_time
-    print(f"Elapsed Time: {elapsed_time/60.0} min")
-    #print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
+    print(f"Elapsed Time: {elapsed_time / 60.0} min")
+    # print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
+
+
 #
+def main():
+    args = parseArguments()
+    _standalone_match_peaks(args.reference_peak_list,
+                            args.reference_cs_column_names,
+                            args.reference_peak_list_error,
+                            args.target_peak_list,
+                            args.target_cs_column_names,
+                            args.target_peak_list_error,
+                            args.output_directory,
+                            args.expected_fraction_csp,
+                            args.variance_scale_fraction_csp,
+                            args.expected_fraction_missing,
+                            args.variance_scale_fraction_missing,
+                            args.gradient_convergence,
+                            args.compute_reference_offset,
+                            args.display_distributions,
+                            args.confidence_cutoff)
+
 
 
 

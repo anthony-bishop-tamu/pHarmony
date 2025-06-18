@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "PeakMatcher"
 dynamic = ["version"]
-description = "A description of your package"
+description = "Package for matching peaks changing chemical"
 requires-python = ">=3.7"
 dependencies = [
     "numpy>=1.24.0",

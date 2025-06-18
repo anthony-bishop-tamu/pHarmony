@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import torch
 from matplotlib import pyplot as plt
+from pathlib import Path
 def buildPlot(matchingProbabilities: torch.tensor,
               csp_mixture_weights: np.array,
               no_csp_match_distribution: torch.distributions.Distribution,
@@ -86,11 +87,11 @@ def outputResults(matchingProbabilities: np.array,
                                 state_probability: np.array,
                                 referencePeakList: tuple, #tuple of a pandas dataframe and the dimension (0 or 1) in the representation, and a list of the resonance columns
                                 targetPeakList: tuple, #tuple of a pandas dataframe and the dimension (0 or 1) in the representation
-                                transferedPeaks: str,
-                                highConfidenceTransferedPeaks: str,
-                                highConfidenceTransferedPeakList: str,
-                                probabilityTable: str,
-                                chemicalShiftProbabilityTable: str,
+                                transferedPeaks: Path,
+                                highConfidenceTransferedPeaks: Path,
+                                highConfidenceTransferedPeakList: Path,
+                                probabilityTable: Path,
+                                chemicalShiftProbabilityTable: Path,
                                 confidenceCutoff: float = 0.90):
 
 
