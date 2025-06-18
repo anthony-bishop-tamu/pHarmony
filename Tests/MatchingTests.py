@@ -1,4 +1,4 @@
-from PeakMatcher.PeakMatcher import _standalone_match_peaks
+from src.PeakMatcher.PeakMatcher import _standalone_match_peaks
 import importlib_resources
 
 

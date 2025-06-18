@@ -15,12 +15,18 @@ dependencies = [
     "scipy>=1.10",
 ]
 
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where=["src"]
+
 [tool.setuptools_scm]
 version_scheme = "guess-next-dev"
 local_scheme = "node-and-date"
 tag_regex = "^v(?P<version>\\d+\\.\\d+\\.\\d+)$"
 root = "."
-write_to = "PeakMatcher/_version.py"
+write_to = "src/PeakMatcher/_version.py"
 
 [project.scripts]
 PeakMatcher = "PeakMatcher.PeakMatcher:main"
