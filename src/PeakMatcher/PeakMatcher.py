@@ -10,6 +10,7 @@ from .OutputHandling import buildPlot, outputResults
 from .Frechet import Frechet, UniformDistanceSquared
 from pathlib import Path
 import time
+import logging
 class SampleSizeToLargeError(Exception):
     pass
 #
@@ -18,6 +19,50 @@ class EMConvergenceFailureError(Exception):
 
 class NoPeaksFoundError(Exception):
     pass
+# 1. Choose a numeric value: between DEBUG (10) and INFO (20)
+VERBOSE_LEVEL = 15
+
+# 2. Register the name → value mapping
+logging.addLevelName(VERBOSE_LEVEL, "VERBOSE")
+
+# 3. Add a helper method so you can call logger.verbose(...)
+def verbose(self, msg, *args, **kwargs):
+    if self.isEnabledFor(VERBOSE_LEVEL):
+        self._log(VERBOSE_LEVEL, msg, args, **kwargs)
+
+logging.Logger.verbose = verbose     # monkey-patch the class
+def setup_logger(
+    log_file = None,
+    *,
+    level: int = logging.INFO,
+    overwrite: bool = False,
+    keep_console: bool = True,
+) -> logging.Logger:
+
+    handlers = []
+
+    if log_file is None:
+        handlers.append(logging.StreamHandler(sys.stdout))
+    else:
+        log_path = Path(log_file).expanduser().resolve()
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        mode = "w" if overwrite else "a"
+        handlers.append(logging.FileHandler(log_path, mode=mode, encoding="utf-8"))
+
+        if keep_console:
+            handlers.append(logging.StreamHandler(sys.stdout))
+
+    fmt = "%(asctime)s  %(levelname)-8s  %(name)s: %(message)s"
+    logging.basicConfig(
+        level=level,
+        handlers=handlers,
+        format=fmt,
+        datefmt="%Y-%m-%d %H:%M:%S",
+        force=True,           # Python ≥3.8; wipes existing handlers
+    )
+
+    # Return a logger scoped to the caller’s module
+    return logging.getLogger(__name__)
 def calculateBetaParametersFromMeanAndVariance(mean, variance):
     assert 0 < mean and mean < 1
     assert 0 < variance
@@ -113,7 +158,7 @@ def verifyTensorConvergence(torchPreviousParameter: torch.tensor,
                                maxDeviation: torch.tensor):
     difference = torchNewParameter - torchPreviousParameter
     converged = difference.abs().mean() < averageDeviation and difference.abs().max() < maxDeviation
-    print(converged.item(), difference.abs().mean(), averageDeviation, difference.abs().max(), maxDeviation)
+    GLOBAL_LOGGER.info("CONVERGENCE?=%s MaxDeviation=%.3e Limit=%.3e", converged, difference.abs().max(), maxDeviation)
     return converged.item(), difference.abs().mean(), difference.abs().max()
 #
 def calculatePositionProb(sample, shape):
@@ -199,12 +244,12 @@ def optimizeOffSet(reference_peak_positions: torch.Tensor,
         #
         loss = optimizer.step(closure)
 
-        print(f"OffSet step {i} Loss: ", loss.item(), prevLoss-loss.item(), offset.grad, offset)
+        GLOBAL_LOGGER.verbose("Offset Optimization step=%i, change=%d, grad=%d, offset=%s", loss.item(), prevLoss-loss.item(), offset.grad, offset)
         if not (offset.isfinite().all() and offset.grad.isfinite().all()):
             with torch.no_grad():
                 offset[:] = previous_offset[:]
             optimizer = torch.optim.LBFGS([offset], lr=optimizer.param_groups[0]['lr'] * 0.5,line_search_fn='strong_wolfe')
-            print("Lowering Learning rate")
+            GLOBAL_LOGGER.verbose("Lowering Learning rate")
             continue
         elif abs(prevLoss - loss.item()) < 1e-5:
             break
@@ -252,8 +297,8 @@ def maximization(samples: tuple,
         #with torch.no_grad():
         #    csp_distribution.alpha.clamp_(min=1.0)
         if i % 1 == 0:
-            print(f"Step {i} Loss: ", loss.item(), prevLoss-loss.item(), csp_distribution.alpha.item(), csp_distribution.scale.item(),
-              csp_distribution.alpha.grad.item(), csp_distribution.scale.grad.item(), optimizer.param_groups[0]['lr'], f"{csp_distribution.variance()}")
+            GLOBAL_LOGGER.verbose("Step=%6d Loss=%12.3e, diff=%12.3e, csp_alpha=%12.3e, csp_scale=%12.3e csp_alpha_grad=%12.3e csp_scale_grad=%12.3e, lr=%12.3e csp_dist_var= %12.3e", i,loss.item(), prevLoss-loss.item(), csp_distribution.alpha.item(), csp_distribution.scale.item(),
+              csp_distribution.alpha.grad.item(), csp_distribution.scale.grad.item(), optimizer.param_groups[0]['lr'], csp_distribution.variance())
         #
         if not (torch.tensor([csp_distribution.alpha,csp_distribution.scale,csp_distribution.alpha.grad,csp_distribution.scale.grad]).isfinite().all() and
             csp_distribution.alpha.item() > 0 and csp_distribution.scale.item() > 0 and prevLoss-loss.item() >= -1E-3):
@@ -262,7 +307,7 @@ def maximization(samples: tuple,
                 csp_distribution.scale[0] = previous_scale[0]
             optimizer = torch.optim.Adam(optimization_list, lr=optimizer.param_groups[0]['lr'] * 0.5)
 
-            print("Lowering Learning rate")
+            GLOBAL_LOGGER.verbose("Lowering Learning rate")
             continue
         elif prevLoss - loss.item() < 1e-7 and (torch.abs(torch.tensor([csp_distribution.alpha.grad,csp_distribution.scale.grad])) < gradient_convergence).all():
             break
@@ -326,7 +371,6 @@ def runEMStep(distances: torch.tensor,
         loss = EM_minimization_function(samples,dist,
                                         csp_mixture_weights.log(),matching_mixture_weights.log(), missing_mixture_weights.log(),
                                         csp_mixture_priors, matching_mixture_priors, missing_mixture_priors)
-        print("Loss: ", loss.item())
         if display_distributions:
             fig = buildPlot(positionProbs,
                         csp_mixture_weights.detach().numpy(),
@@ -366,6 +410,7 @@ def runEM(distances_squared_normalized: torch.tensor,
     matching_probs = initial_matching_probs
     for i in range(maxEMSteps):
         previous_dist = dist
+        previous_csp_dist_params = previous_dist.csp_distribution.params()
         previous_matching_probs = matching_probs
         samples, csp_mixture_weights, matching_mixture_weights, missing_mixture_weights, csp_distribution, non_matching_distribution = runEMStep(
             distances_squared_normalized,
@@ -389,20 +434,34 @@ def runEM(distances_squared_normalized: torch.tensor,
                                         non_matching_distribution)
         matching_probs = calculatePositionProb(samples, distances_squared_normalized.shape).detach()
 
+        GLOBAL_LOGGER.info("CSP posterior convergence")
         csp_distribution_converged, csp_mean, csp_max = verifyTensorConvergence(dist.csp_posterior_probabilities.exp()[:,:,1]*matching_probs,
                                                                                 previous_dist.csp_posterior_probabilities.exp()[:,:,1]*matching_probs,
                                                                                 0.05,
                                                                                 0.05)
+        GLOBAL_LOGGER.info("Matching posterior convergence")
         nonMatching_distribution_converged, nonMatching_mean, nonMatching_max = verifyTensorConvergence(
             previous_matching_probs,
             matching_probs,
             0.05,
             0.10)
-        print(f"csp_dist_change {csp_mean}, {csp_max}, nonMatching_dist_change {nonMatching_mean}, {nonMatching_max}")
+        GLOBAL_LOGGER.info("CSP distribution convergece")
+        GLOBAL_LOGGER.info(f"CSP_dist: { dist.csp_distribution.params() }")
+        csp_dist_converged, csp_dist_mean, csp_dist_max = verifyTensorConvergence(dist.csp_distribution.params(),
+                                                                                  previous_csp_dist_params,
+                                                                                  0.05,0.05)
 
-        if csp_distribution_converged and i >= minSteps and nonMatching_distribution_converged:
+        #GLOBAL_LOGGER.info(f"CSP_posterior_converged?:{csp_distribution_converged}, {csp_max:.3e}<0.10?")
+        #GLOBAL_LOGGER.info(f"matching_posterior_converged?:{nonMatching_distribution_converged}, {nonMatching_max:.3e}<0.10?")
+
+        #GLOBAL_LOGGER.info(f"CSP_distribution converged:{csp_dist_converged}, {csp_dist_max:.3e}")
+
+
+        if csp_distribution_converged and i >= minSteps and nonMatching_distribution_converged and csp_dist_converged:
+            GLOBAL_LOGGER.info("Converged?: True")
             break
         else:
+            GLOBAL_LOGGER.info("Converged?: False")
             if i == maxEMSteps - 1:
                 raise EMConvergenceFailureError()
             #
@@ -429,6 +488,7 @@ def parseArguments():
     parser.add_argument( "--display_distributions", action='store_true', help="Display the distributions plots", )
     parser.add_argument( "--confidence_cutoff", type=lambda x: float(x) if 0.0 <= float(x) <= 1.0 else argparse.ArgumentTypeError("Value must be between 0.0 and 1.0."), help="Minimum posterior probability for outputing match", default=0.90)
     parser.add_argument( "--compute_reference_offset",action='store_true', help="Compute reference offset between peak lists", default=False)
+    parser.add_argument("--log_file",action='store_true', help="Write log file", default=False)
     return parser.parse_args()
 
 def calculateDistancesSquaredNormalized(reference_peak_positions: torch.Tensor,
@@ -458,17 +518,17 @@ def determineSampleSize(startingSample,dist):
     size = startingSample.shape[0]
     sample1 = startingSample
     sample2 = dist.sample((size,))
-    print(f"Validating Sample Size: {size} ")
+    GLOBAL_LOGGER.info(f"Validating Sample Size: {size} ")
     maxTries = 6
     i = 1
     while not validateSufficentSampling(sample1,sample2,dist.distances.shape) and i < maxTries:
         size *= 2
-        print(f"Increasing Sample Size to: {size}")
+        GLOBAL_LOGGER.info(f"Increasing Sample Size to: {size}")
         sample1 = dist.sample((int(size),))
         sample2 = dist.sample((int(size),))
         i += 1
     #
-    print(f"New sample size {size}")
+    GLOBAL_LOGGER.info(f"New sample size {size}")
     return sample1
 #
 def MatchPeaks(reference_peak_positions: torch.Tensor,
@@ -478,11 +538,8 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
                expected_fraction_missing: float = 0.1,
                variance_scale_fraction_missing: float = 2.0,
                gradient_convergence: float = 1E-5,
-               fixedOffset: torch.Tensor = None,
-               output=None):
+               fixedOffset: torch.Tensor = None):
 
-    if output is None:
-        output = open(os.devnull,'w')
 
     #intialization
     if fixedOffset is None:
@@ -550,7 +607,7 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
              distances_squared_normalized = optimizeOffSet(reference_peak_positions,target_peak_positions,offset,matching_probs,dist.csp_posterior_probabilities.exp(),
                          learning_rate=1,gradient_convergence=gradient_convergence)
              offset_difference = torch.abs(previous_offset - offset)
-             print(f"Offset_diference {offset_difference}")
+             GLOBAL_LOGGER.info(f"Offset_diference {offset_difference}")
              if (offset_difference/torch.sqrt(torch.mean((reference_peak_positions[:,:,1]**2),dim=0) + torch.mean(target_peak_positions[:,:,1]**2,dim=0)) < 0.1).all():
                  break
 
@@ -564,7 +621,7 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
 
     return dist, matching_probs.detach(), distances_squared_normalized,offset
 #
-def _standalone_match_peaks(reference_peak_list: Path,
+def standalone_match_peaks(reference_peak_list: Path,
                             reference_cs_column_names: list,
                             reference_peak_list_error: list,
                             target_peak_list: Path,
@@ -578,11 +635,17 @@ def _standalone_match_peaks(reference_peak_list: Path,
                             gradient_convergence: float,
                             compute_reference_offset: bool,
                             display_distributions: bool,
-                            confidence_cutoff: float):
-
+                            confidence_cutoff: float,
+                            log_file: bool = False,
+                            log_level: int = logging.INFO):
     start_time = time.time()
     output_directory = output_directory.resolve()
     output_directory.mkdir(exist_ok=True, parents=True)
+    global GLOBAL_LOGGER
+    GLOBAL_LOGGER = setup_logger(None, level=log_level)
+    if log_file:
+        log_output = output_directory/"log.txt"
+        GLOBAL_LOGGER = setup_logger(log_output,level=log_level)
 
     reference_peak_positions, reference_peaks = getPeakPositionsFromFile(reference_peak_list,
                                                                          reference_cs_column_names,
@@ -605,8 +668,7 @@ def _standalone_match_peaks(reference_peak_list: Path,
         expected_fraction_missing,
         variance_scale_fraction_missing,
         gradient_convergence,
-        offset,
-        sys.stdout)
+        offset)
 
     name_stem = f"{reference_peak_list.name}_{target_peak_list.name}"
     outputResults(matchingProbabilities.numpy(),
@@ -620,30 +682,33 @@ def _standalone_match_peaks(reference_peak_list: Path,
                   output_directory / "CSP_probabilities.csv",
                   confidence_cutoff)
 
-    print("Outputing plots")
+    GLOBAL_LOGGER.info("Outputing plots")
     fig = buildPlot(matchingProbabilities,
                     posteriorMatchingDistribution.csp_mixture_weights.exp().detach().cpu().numpy(),
                     posteriorMatchingDistribution.no_csp_distribution,
                     posteriorMatchingDistribution.csp_distribution,
                     distances_squared_normalized.detach(),
                     0.50)
-    print(f"Output Directory: {output_directory}")
+    GLOBAL_LOGGER.info(f"Output Directory: {output_directory}")
     fig.savefig(output_directory / f"{name_stem}_fittedDistributions.png")
     if display_distributions:
         fig.show()
 
-    print(f"Computed Offset: {offset} ")
-    print("Done")
+    GLOBAL_LOGGER.info(f"Final Offset: {offset} ")
+    GLOBAL_LOGGER.info("Done")
     end_time = time.time()
     elapsed_time = end_time - start_time
-    print(f"Elapsed Time: {elapsed_time / 60.0} min")
+    GLOBAL_LOGGER.info(f"Elapsed Time: {elapsed_time / 60.0:0.2f} min")
     # print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
 
 
 #
 def main():
+    global GLOBAL_LOGGER
     args = parseArguments()
-    _standalone_match_peaks(args.reference_peak_list,
+
+
+    standalone_match_peaks(args.reference_peak_list,
                             args.reference_cs_column_names,
                             args.reference_peak_list_error,
                             args.target_peak_list,
@@ -657,7 +722,8 @@ def main():
                             args.gradient_convergence,
                             args.compute_reference_offset,
                             args.display_distributions,
-                            args.confidence_cutoff)
+                            args.confidence_cutoff,
+                            args.log_file)
 
 
 

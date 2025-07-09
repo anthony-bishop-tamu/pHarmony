@@ -37,6 +37,8 @@ class Frechet(torch.distributions.Distribution):
         else:
             return self.scale*self.scale*(torch.lgamma(1-2.0/self.alpha).exp() - torch.lgamma(1-1.0/self.alpha).exp()**2)
         #
+    def params(self):
+        return torch.tensor([self.alpha, self.scale, self.loc],dtype=self.alpha.dtype,device=self.alpha.device)
 class RadialFrechet(Frechet):
     def __init__(self, alpha, scale, dim, loc=0, validate_args=None):
         self._dim = dim
