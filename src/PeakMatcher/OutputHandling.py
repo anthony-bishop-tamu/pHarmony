@@ -40,7 +40,7 @@ def buildPlot(matchingProbabilities: torch.tensor,
        # ax1.plot(bins[1:],non_match_distribution.log_prob(bins[1:]).exp().detach().numpy()*matching_mixture_weights[1],color='orange',label='NonMatchDistribution')
 
         #log scale plot
-        log_bins = np.logspace(-0.5,np.log10(non_matches.max()),100)
+        log_bins = np.logspace(-0.5,np.log10(non_matches.max().item()),100)
 
         matches_hist, edges = np.histogram(matches, bins=log_bins)
         nonmatches_hist, edges = np.histogram(non_matches, bins=log_bins)
@@ -125,31 +125,38 @@ def outputResults(matchingProbabilities: np.array,
     csp_confidences = state_probability[row_indexes,column_indexes,1]
     referencePeaks = referencePeakList[0].iloc[row_indexes][["Assignment"]]
     targetPeaks = targetPeakList[0].iloc[column_indexes][["Assignment"]]
-    targetPositions = targetPeakList[0].iloc[column_indexes][targetPeakList[1]]
-    referencePositions = referencePeakList[0].iloc[row_indexes][referencePeakList[1]]
+    targetPositions = targetPeakList[0].iloc[column_indexes]
+    referencePositions = referencePeakList[0].iloc[row_indexes]
+    referencePositionsMatchedValues = referencePositions[referencePeakList[1]]
+    targetPositionsMatchedValues = targetPositions[targetPeakList[1]]
+
     match_probs = pd.DataFrame(match_probs, columns=["MatchingProbability"])
     csp_probs = pd.DataFrame(csp_confidences, columns=["CSPProbability"])
     missing_probs = pd.DataFrame(missing_prob, columns=["MissingProbability"])
     distances = pd.DataFrame(distances, columns=["Dnm^2"])
     CSPs = pd.DataFrame([], columns=["CSPs (ppm)"])
     if CSP_scaling_factors is not None:
-        calc_csps = np.sqrt(np.square((targetPositions - referencePositions)*np.array(CSP_scaling_factors)[np.newaxis,:]).sum(axis=1))
+        calc_csps = np.sqrt(np.square((np.array(targetPositionsMatchedValues) - np.array(referencePositionsMatchedValues))*np.array(CSP_scaling_factors)[np.newaxis,:]).sum(axis=1))
         CSPs = pd.DataFrame(calc_csps, columns=["CSPs (ppm)"])
 
-    transfer_df = pd.concat([referencePeaks.reset_index(drop=True), referencePositions,
-                             targetPeaks.reset_index(drop=True), targetPositions.reset_index(drop=True) ,
-                             match_probs,csp_probs,missing_probs,distances,CSPs], axis=1)
-    transfer_df.columns = ([ "Assignment_ref"]+["ref_"+label for label in referencePeakList[1]]+
-                           ["Assignment_target"]+[label for label in targetPeakList[1] ] +
-                               [ "MatchingProbability", "CSPProbability", "MissingProbability", "Dnm^2", "CSPs (ppm)"])
+    transfer_df = pd.concat([referencePositions.add_suffix("_ref").reset_index(drop=True),
+                             targetPositions.add_suffix("_target").reset_index(drop=True),
+                             match_probs,csp_probs,missing_probs,distances,CSPs],axis=1)
+    #transfer_df.columns = ([ "Assignment_ref"]+["ref_"+label for label in referencePeakList[1]]+
+    #                       ["Assignment_target"]+[label for label in targetPeakList[1] ] +
+    #                           [ "MatchingProbability", "CSPProbability", "MissingProbability", "Dnm^2", "CSPs (ppm)"])
     transfer_df.to_csv(transferedPeaks,index=False)
     transfer_df[transfer_df['MatchingProbability'] > confidenceCutoff].to_csv(highConfidenceTransferedPeaks,index=False)
 
-    transfer_df.rename(columns={"Assignment_ref": "Assignment"}, inplace=True)
 
-    transfer_df[transfer_df['MatchingProbability'] > confidenceCutoff][
-        ["Assignment"]+[label for label in targetPeakList[1]]
-        ].to_csv(highConfidenceTransferedPeakList,index=False,sep='\t')
+    highConfidence = transfer_df[transfer_df['MatchingProbability'] > confidenceCutoff]
+
+
+    hcpeaklist_df = highConfidence[["Assignment_ref"]+[column for column in highConfidence.columns if column[-len("_target"):] == "_target" and column != "Assignment_target" ]].copy()
+
+    hcpeaklist_df.rename(columns=lambda c: c.removesuffix("_target").removesuffix("ref"), inplace=True)
+
+    hcpeaklist_df.to_csv(highConfidenceTransferedPeakList,index=False)
 
 
 #
