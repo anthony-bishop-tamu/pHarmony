@@ -11,6 +11,7 @@ from .Frechet import Frechet, UniformDistanceSquared
 from pathlib import Path
 import time
 import logging
+from ._version import __version__
 class SampleSizeToLargeError(Exception):
     pass
 #
@@ -18,6 +19,9 @@ class EMConvergenceFailureError(Exception):
     pass
 
 class NoPeaksFoundError(Exception):
+    pass
+
+class ArgumentError(Exception):
     pass
 # 1. Choose a numeric value: between DEBUG (10) and INFO (20)
 VERBOSE_LEVEL = 15
@@ -113,7 +117,7 @@ def getPeakPositionsFromFile(filename, cs_cols, uncertaintycols=None, fixedError
     df = pd.read_csv(filename,sep="\s+")
     positions = df[cs_cols].to_numpy(dtype=np.float64)
     if positions.shape[0] == 0:
-        raise NoPeaksFoundError(f"No peaks detected in File: {filename}")
+        raise NoPeaksFoundError(f"No peaks detected in file")
     if uncertaintycols is not None:
         uncertainties = df[uncertaintycols].to_numpy(dtype=np.float64)
     elif fixedError is not None:
@@ -489,6 +493,8 @@ def parseArguments():
     parser.add_argument( "--confidence_cutoff", type=lambda x: float(x) if 0.0 <= float(x) <= 1.0 else argparse.ArgumentTypeError("Value must be between 0.0 and 1.0."), help="Minimum posterior probability for outputing match", default=0.90)
     parser.add_argument( "--compute_reference_offset",action='store_true', help="Compute reference offset between peak lists", default=False)
     parser.add_argument("--log_file",action='store_true', help="Write log file", default=False)
+    parser.add_argument( "--CSP_scaling_factors",type=float, nargs="+", help="nucleus scaling factors for CSP calculation (e.g. 0.252 0.101 1.00 for a C, N, H dimensional experiment")
+
     return parser.parse_args()
 
 def calculateDistancesSquaredNormalized(reference_peak_positions: torch.Tensor,
@@ -636,23 +642,45 @@ def standalone_match_peaks(reference_peak_list: Path,
                             compute_reference_offset: bool,
                             display_distributions: bool,
                             confidence_cutoff: float,
+                            CSP_scaling_factors: list,
                             log_file: bool = False,
-                            log_level: int = logging.INFO):
+                            log_level: int = logging.INFO,
+                            ):
+
+    #validate inputs
+    dims = len(reference_cs_column_names)
+    if len(reference_cs_column_names) != dims:
+        raise ArgumentError("number of reference cs columns (dimensions) must equal number of target cs columns (dimensions)")
+    if len(reference_peak_list_error) != dims:
+        raise ArgumentError("Reference peak list error: Exactly one value for error must be provided for each reference dimension")
+    if len(target_peak_list_error) != dims:
+        raise ArgumentError("target peak list error: Exactly one value for error must be provided for each target dimension")
+    if CSP_scaling_factors is not None and len(CSP_scaling_factors) != dims:
+        raise ArgumentError("Must provide a CSP scaling factor for each matched dimension (omit flag to skip CSP calculation)")
+
+
+
     start_time = time.time()
     output_directory = output_directory.resolve()
     output_directory.mkdir(exist_ok=True, parents=True)
     global GLOBAL_LOGGER
     GLOBAL_LOGGER = setup_logger(None, level=log_level)
+    GLOBAL_LOGGER.info(f"Version: {__version__}")
+    GLOBAL_LOGGER.info(f"Starting peak matching in {time.time() - start_time} seconds")
     if log_file:
         log_output = output_directory/"log.txt"
         GLOBAL_LOGGER = setup_logger(log_output,level=log_level)
 
-    reference_peak_positions, reference_peaks = getPeakPositionsFromFile(reference_peak_list,
+    try:
+        reference_peak_positions, reference_peaks = getPeakPositionsFromFile(reference_peak_list,
                                                                          reference_cs_column_names,
                                                                          fixedError=reference_peak_list_error)
-    target_peak_positions, target_peaks = getPeakPositionsFromFile(target_peak_list,
-                                                                   target_cs_column_names,
-                                                                   fixedError=target_peak_list_error)
+        target_peak_positions, target_peaks = getPeakPositionsFromFile(target_peak_list,
+                                                                       target_cs_column_names,
+                                                                       fixedError=target_peak_list_error)
+    except Exception as e:
+        GLOBAL_LOGGER.exception(f"Exception raised while getting peak positions from file: ")
+
 
     if compute_reference_offset:
         offset = None
@@ -673,6 +701,7 @@ def standalone_match_peaks(reference_peak_list: Path,
     name_stem = f"{reference_peak_list.name}_{target_peak_list.name}"
     outputResults(matchingProbabilities.numpy(),
                   posteriorMatchingDistribution.csp_posterior_probabilities.exp(),
+                  distances_squared_normalized,
                   (reference_peaks, reference_cs_column_names),
                   (target_peaks, target_cs_column_names),
                   output_directory / f"{name_stem}_transferred.csv",
@@ -680,6 +709,7 @@ def standalone_match_peaks(reference_peak_list: Path,
                   output_directory / f"{name_stem}_transferred.list",
                   output_directory / "Match_probabilities.csv",
                   output_directory / "CSP_probabilities.csv",
+                  CSP_scaling_factors,
                   confidence_cutoff)
 
     GLOBAL_LOGGER.info("Outputing plots")
@@ -707,7 +737,7 @@ def main():
     global GLOBAL_LOGGER
     args = parseArguments()
 
-
+    print("LogFile: ", args.log_file)
     standalone_match_peaks(args.reference_peak_list,
                             args.reference_cs_column_names,
                             args.reference_peak_list_error,
@@ -723,6 +753,7 @@ def main():
                             args.compute_reference_offset,
                             args.display_distributions,
                             args.confidence_cutoff,
+                            args.CSP_scaling_factors,
                             args.log_file)
 
 

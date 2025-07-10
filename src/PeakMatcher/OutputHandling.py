@@ -85,6 +85,7 @@ def buildPlot(matchingProbabilities: torch.tensor,
 #
 def outputResults(matchingProbabilities: np.array,
                                 state_probability: np.array,
+                                distances_squared_normalized: np.array,
                                 referencePeakList: tuple, #tuple of a pandas dataframe and the dimension (0 or 1) in the representation, and a list of the resonance columns
                                 targetPeakList: tuple, #tuple of a pandas dataframe and the dimension (0 or 1) in the representation
                                 transferedPeaks: Path,
@@ -92,6 +93,7 @@ def outputResults(matchingProbabilities: np.array,
                                 highConfidenceTransferedPeakList: Path,
                                 probabilityTable: Path,
                                 chemicalShiftProbabilityTable: Path,
+                                CSP_scaling_factors: list,
                                 confidenceCutoff: float = 0.90):
 
 
@@ -116,7 +118,9 @@ def outputResults(matchingProbabilities: np.array,
     #build transferred peak lists
 
     match_probs = matchingProbabilities.max(axis=1)
+    missing_prob = 1-matchingProbabilities.sum(axis=1)
     column_indexes = matchingProbabilities.argmax(axis=1)
+    distances = distances_squared_normalized[np.arange(distances_squared_normalized.shape[0]),matchingProbabilities.argmax(axis=1)]
     row_indexes = np.arange(matchingProbabilities.shape[0])
     csp_confidences = state_probability[row_indexes,column_indexes,1]
     referencePeaks = referencePeakList[0].iloc[row_indexes][["Assignment"]]
@@ -125,13 +129,19 @@ def outputResults(matchingProbabilities: np.array,
     referencePositions = referencePeakList[0].iloc[row_indexes][referencePeakList[1]]
     match_probs = pd.DataFrame(match_probs, columns=["MatchingProbability"])
     csp_probs = pd.DataFrame(csp_confidences, columns=["CSPProbability"])
+    missing_probs = pd.DataFrame(missing_prob, columns=["MissingProbability"])
+    distances = pd.DataFrame(distances, columns=["Dnm^2"])
+    CSPs = pd.DataFrame([], columns=["CSPs (ppm)"])
+    if CSP_scaling_factors is not None:
+        calc_csps = np.sqrt(np.square((targetPositions - referencePositions)*np.array(CSP_scaling_factors)[np.newaxis,:]).sum(axis=1))
+        CSPs = pd.DataFrame(calc_csps, columns=["CSPs (ppm)"])
 
     transfer_df = pd.concat([referencePeaks.reset_index(drop=True), referencePositions,
                              targetPeaks.reset_index(drop=True), targetPositions.reset_index(drop=True) ,
-                             match_probs,csp_probs], axis=1)
+                             match_probs,csp_probs,missing_probs,distances,CSPs], axis=1)
     transfer_df.columns = ([ "Assignment_ref"]+["ref_"+label for label in referencePeakList[1]]+
                            ["Assignment_target"]+[label for label in targetPeakList[1] ] +
-                               [ "MatchingProbability", "CSPProbability"])
+                               [ "MatchingProbability", "CSPProbability", "MissingProbability", "Dnm^2", "CSPs (ppm)"])
     transfer_df.to_csv(transferedPeaks,index=False)
     transfer_df[transfer_df['MatchingProbability'] > confidenceCutoff].to_csv(highConfidenceTransferedPeaks,index=False)
 
