@@ -75,7 +75,7 @@ def calculateBetaParametersFromMeanAndVariance(mean, variance):
     beta = (1-mean)*mu
 
     return torch.tensor([alpha, beta],dtype=torch.float64)
-def initalizeAllComponents(distances):
+def initalizeAllComponents(distances, dims):
     csp_conditional_assignments = torch.ones_like(distances)*0.05
     csp_conditional_assignments[distances < 3] = 0.95
     csp_conditional_assignments = torch.stack((csp_conditional_assignments,1.0-csp_conditional_assignments),dim=2).log()
@@ -101,7 +101,7 @@ def initalizeAllComponents(distances):
     csp_distribution = Frechet(alpha=torch.tensor([2.5],dtype=torch.float64),
                                      scale=torch.tensor([30], dtype=torch.float64))
 
-    non_matching_distribution = UniformDistanceSquared(dim=torch.tensor([2.0],dtype=torch.float64),
+    non_matching_distribution = UniformDistanceSquared(dim=torch.tensor(dims,dtype=torch.float64),
                                                        Rmax=distances.max(dim=-1)[0])
 
     #non_matching_distribution = torch.distributions.Uniform(0,distances.max()+0.005)
@@ -473,6 +473,17 @@ def runEM(distances_squared_normalized: torch.tensor,
     #
     return dist, matching_probs
 
+def isPositive(x):
+    if float(x) > 0:
+        return True
+    else:
+        argparse.ArgumentTypeError("Value must be > than 0")
+def isBetween0And1(x):
+    if 0.0 <= float(x) <= 1.0:
+        return True
+    else:
+        argparse.ArgumentTypeError("Value must be between 0.0 and 1.0.")
+
 def parseArguments():
     #torch.autograd.set_detect_anomaly(True)
     parser = argparse.ArgumentParser()
@@ -480,20 +491,20 @@ def parseArguments():
     parser.add_argument( '--reference_cs_column_names', required=True, type=str, nargs='+', help='reference cs column names (e.g. \'w1\', \'w2\')')
     parser.add_argument('--target_peak_list', required=True, type=Path, help='target peak list filename')
     parser.add_argument('--target_cs_column_names', required=True, type=str, nargs='+', help='target cs column names (e.g. \'w1\', \'w2\')')
-    parser.add_argument('--reference_peak_list_error', required=True, type=float, nargs='+', help='Uncertainty in each dimension for the reference peak list (e.g. \" 0.0015 0.015 \" for a 2D HSQC [15N, 1H]')
-    parser.add_argument('--target_peak_list_error', required=True, type=float, nargs='+', help='Uncertainty in each dimension for the target peak list (e.g. \" 0.0015, 0.015 \" for a 2D HSQC [15N, 1H]')
+    parser.add_argument('--reference_peak_list_error', required=True, type=isPositive, nargs='+', help='Uncertainty in each dimension for the reference peak list (e.g. \" 0.0015 0.015 \" for a 2D HSQC [15N, 1H]')
+    parser.add_argument('--target_peak_list_error', required=True, type=isPositive, nargs='+', help='Uncertainty in each dimension for the target peak list (e.g. \" 0.0015, 0.015 \" for a 2D HSQC [15N, 1H]')
     #parser.add_argument("--minimum_distance", type=float, help="Minimum normalized distance between two peaks, all normalized distances lower than this value will be set to this value",default=0.005)
-    parser.add_argument('--expected_fraction_csp', type=float, help="Estimate of the fraction of peaks expected to undergo a chemical shift perturbation", default=0.05)
-    parser.add_argument("--variance_scale_fraction_csp",type=float, help="scaling factor for variance of the prior distribution of csp distribution weight", default=5.0)
-    parser.add_argument('--expected_fraction_missing', type=float, help="Estimate of the fraction of peaks that you think will be missing between spectra", default=0.02)
-    parser.add_argument("--variance_scale_fraction_missing",type=float, help="scaling factor for variance of the prior distribution of matching distribution weight", default=2.0)
-    parser.add_argument("--gradient_convergence",type=float, help="Gradient convergence criterion", default=1E-5)
+    parser.add_argument('--expected_fraction_csp', type=isBetween0And1, help="Estimate of the fraction of peaks expected to undergo a chemical shift perturbation", default=0.05)
+    parser.add_argument("--variance_scale_fraction_csp",type=isPositive, help="scaling factor for variance of the prior distribution of csp distribution weight", default=5.0)
+    parser.add_argument('--expected_fraction_missing', type=isBetween0And1, help="Estimate of the fraction of peaks that you think will be missing between spectra", default=0.02)
+    parser.add_argument("--variance_scale_fraction_missing",type=isPositive, help="scaling factor for variance of the prior distribution of matching distribution weight", default=2.0)
+    parser.add_argument("--gradient_convergence",type=isPositive, help="Gradient convergence criterion", default=1E-5)
     parser.add_argument("--output_directory",type=Path,help="Directory path to output the results to", default="./peak_matcher_output")
     parser.add_argument( "--display_distributions", action='store_true', help="Display the distributions plots", )
-    parser.add_argument( "--confidence_cutoff", type=lambda x: float(x) if 0.0 <= float(x) <= 1.0 else argparse.ArgumentTypeError("Value must be between 0.0 and 1.0."), help="Minimum posterior probability for outputing match", default=0.90)
+    parser.add_argument( "--confidence_cutoff", type=isBetween0And1 , help="Minimum posterior probability for outputing match", default=0.90)
     parser.add_argument( "--compute_reference_offset",action='store_true', help="Compute reference offset between peak lists", default=False)
     parser.add_argument("--log_file",action='store_true', help="Write log file", default=False)
-    parser.add_argument( "--CSP_scaling_factors",type=float, nargs="+", help="nucleus scaling factors for CSP calculation (e.g. 0.252 0.101 1.00 for a C, N, H dimensional experiment")
+    parser.add_argument( "--CSP_scaling_factors",type=isPositive, nargs="+", help="nucleus scaling factors for CSP calculation (e.g. 0.252 0.101 1.00 for a C, N, H dimensional experiment")
 
     return parser.parse_args()
 
@@ -546,7 +557,7 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
                gradient_convergence: float = 1E-5,
                fixedOffset: torch.Tensor = None):
 
-
+    global GLOBAL_LOGGER
     #intialization
     if fixedOffset is None:
         offset = torch.zeros((reference_peak_positions.shape[-2],), dtype=torch.float64, requires_grad=True)
@@ -555,8 +566,10 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
 
     assert offset.shape[-1] == reference_peak_positions.shape[-2]
 
+    dims = reference_peak_positions.shape[-2]
+
     distances_squared_normalized = calculateDistancesSquaredNormalized(reference_peak_positions, target_peak_positions, offset)
-    csp_distribution, non_matching_distribution, csp_mixture_weights, matching_mixture_weights = initalizeAllComponents(distances_squared_normalized.detach())
+    csp_distribution, non_matching_distribution, csp_mixture_weights, matching_mixture_weights = initalizeAllComponents(distances_squared_normalized.detach(),dims)
 
     #build priors
     expected_no_csp_ratio = 1.0 - expected_fraction_csp
@@ -570,9 +583,13 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
     match_std = expected_match_ratio * expected_missing_ratio
     matching_mixture_priors = calculateBetaParametersFromMeanAndVariance(mean=expected_match_ratio,
                                                                          variance=variance_scale_fraction_missing * match_std ** 2)  # [matching, nonmatching)
-    missing_mixture_priors = calculateBetaParametersFromMeanAndVariance(mean=1.0 - expected_fraction_missing,
-                                                                        variance=variance_scale_fraction_missing * expected_fraction_missing ** 2)
-    initial_missing_mixture_weights = missing_mixture_priors.detach().clone()
+    fraction_possible_matched_rows = min(1,distances_squared_normalized.shape[1]/distances_squared_normalized.shape[0])
+    max_fraction_missing_rows = 1 - fraction_possible_matched_rows
+    expected_fraction_missing_rows =  max(expected_fraction_missing,1-(1-max_fraction_missing_rows)*(1-expected_fraction_missing))
+    missing_mixture_priors = calculateBetaParametersFromMeanAndVariance(mean=1.0 - expected_fraction_missing_rows,
+                                                                        variance=variance_scale_fraction_missing * expected_fraction_missing_rows ** 2)
+    GLOBAL_LOGGER.info(f"fraction_possilbe_matched_rows: {fraction_possible_matched_rows}, expected_fraction_missing_rows: {expected_fraction_missing_rows}, expected_fraction_missing: {expected_fraction_missing} MissingMixture_priors: {missing_mixture_priors}")
+    initial_missing_mixture_weights = missing_mixture_priors.log().detach().clone()
     initial_matching_mixture_weights = matching_mixture_weights.detach().clone()
     initial_csp_mixture_weights = csp_mixture_weights.detach().clone()
     initial_csp_distribution = csp_distribution
@@ -648,96 +665,101 @@ def standalone_match_peaks(reference_peak_list: Path,
                             ):
 
     #validate inputs
-    dims = len(reference_cs_column_names)
-    if len(reference_cs_column_names) != dims:
-        raise ArgumentError("number of reference cs columns (dimensions) must equal number of target cs columns (dimensions)")
-    if len(reference_peak_list_error) != dims:
-        raise ArgumentError("Reference peak list error: Exactly one value for error must be provided for each reference dimension")
-    if len(target_peak_list_error) != dims:
-        raise ArgumentError("target peak list error: Exactly one value for error must be provided for each target dimension")
-    if CSP_scaling_factors is not None and len(CSP_scaling_factors) != dims:
-        raise ArgumentError("Must provide a CSP scaling factor for each matched dimension (omit flag to skip CSP calculation)")
-
-
+    global GLOBAL_LOGGER
+    if log_file:
+        log_output = output_directory / "log.txt"
+        GLOBAL_LOGGER = setup_logger(log_output, level=log_level)
+    else:
+        GLOBAL_LOGGER = setup_logger(None, level=log_level)
 
     start_time = time.time()
-    output_directory = output_directory.resolve()
-    output_directory.mkdir(exist_ok=True, parents=True)
-    global GLOBAL_LOGGER
-    GLOBAL_LOGGER = setup_logger(None, level=log_level)
     GLOBAL_LOGGER.info(f"Version: {__version__}")
-    GLOBAL_LOGGER.info(f"Starting peak matching in {time.time() - start_time} seconds")
-    if log_file:
-        log_output = output_directory/"log.txt"
-        GLOBAL_LOGGER = setup_logger(log_output,level=log_level)
 
     try:
-        reference_peak_positions, reference_peaks = getPeakPositionsFromFile(reference_peak_list,
-                                                                         reference_cs_column_names,
-                                                                         fixedError=reference_peak_list_error)
-        target_peak_positions, target_peaks = getPeakPositionsFromFile(target_peak_list,
-                                                                       target_cs_column_names,
-                                                                       fixedError=target_peak_list_error)
+        dims = len(reference_cs_column_names)
+        if len(reference_cs_column_names) != dims:
+            raise ArgumentError("number of reference cs columns (dimensions) must equal number of target cs columns (dimensions)")
+        if len(reference_peak_list_error) != dims:
+            raise ArgumentError("Reference peak list error: Exactly one value for error must be provided for each reference dimension")
+        if len(target_peak_list_error) != dims:
+            raise ArgumentError("target peak list error: Exactly one value for error must be provided for each target dimension")
+        if CSP_scaling_factors is not None and len(CSP_scaling_factors) != dims:
+            raise ArgumentError("Must provide a CSP scaling factor for each matched dimension (omit flag to skip CSP calculation)")
+
+
+
+        output_directory = output_directory.resolve()
+        output_directory.mkdir(exist_ok=True, parents=True)
+
+
+        try:
+            reference_peak_positions, reference_peaks = getPeakPositionsFromFile(reference_peak_list,
+                                                                             reference_cs_column_names,
+                                                                             fixedError=reference_peak_list_error)
+            target_peak_positions, target_peaks = getPeakPositionsFromFile(target_peak_list,
+                                                                           target_cs_column_names,
+                                                                           fixedError=target_peak_list_error)
+        except Exception as e:
+            GLOBAL_LOGGER.exception(f"Exception raised while parsing peak positions")
+            raise e
+
+
+        if compute_reference_offset:
+            offset = None
+        else:
+            offset = torch.zeros((reference_peak_positions.shape[-2],), dtype=torch.float64, requires_grad=True)
+
+        # with profile(activities=[ProfilerActivity.CPU]) as prof:
+        posteriorMatchingDistribution, matchingProbabilities, distances_squared_normalized, offset = MatchPeaks(
+            reference_peak_positions,
+            target_peak_positions,
+            expected_fraction_csp,
+            variance_scale_fraction_csp,
+            expected_fraction_missing,
+            variance_scale_fraction_missing,
+            gradient_convergence,
+            offset)
+
+        name_stem = f"{reference_peak_list.name}_{target_peak_list.name}"
+        outputResults(matchingProbabilities.numpy(),
+                      posteriorMatchingDistribution.csp_posterior_probabilities.exp(),
+                      distances_squared_normalized,
+                      (reference_peaks, reference_cs_column_names),
+                      (target_peaks, target_cs_column_names),
+                      output_directory / f"{name_stem}_transferred.csv",
+                      output_directory / f"{name_stem}_transferred_HC.csv",
+                      output_directory / f"{name_stem}_transferred.list",
+                      output_directory / "Match_probabilities.csv",
+                      output_directory / "CSP_probabilities.csv",
+                      CSP_scaling_factors,
+                      confidence_cutoff)
+
+        GLOBAL_LOGGER.info("Outputing plots")
+        fig = buildPlot(matchingProbabilities,
+                        posteriorMatchingDistribution.csp_mixture_weights.exp().detach().cpu().numpy(),
+                        posteriorMatchingDistribution.no_csp_distribution,
+                        posteriorMatchingDistribution.csp_distribution,
+                        distances_squared_normalized.detach(),
+                        0.50)
+        GLOBAL_LOGGER.info(f"Output Directory: {output_directory}")
+        fig.savefig(output_directory / f"{name_stem}_fittedDistributions.png")
+        if display_distributions:
+            fig.show()
+
+        GLOBAL_LOGGER.info(f"Final Offset: {offset} ")
+        GLOBAL_LOGGER.info("Done")
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        GLOBAL_LOGGER.info(f"Elapsed Time: {elapsed_time / 60.0:0.2f} min")
     except Exception as e:
-        GLOBAL_LOGGER.exception(f"Exception raised while getting peak positions from file: ")
-
-
-    if compute_reference_offset:
-        offset = None
-    else:
-        offset = torch.zeros((reference_peak_positions.shape[-2],), dtype=torch.float64, requires_grad=True)
-
-    # with profile(activities=[ProfilerActivity.CPU]) as prof:
-    posteriorMatchingDistribution, matchingProbabilities, distances_squared_normalized, offset = MatchPeaks(
-        reference_peak_positions,
-        target_peak_positions,
-        expected_fraction_csp,
-        variance_scale_fraction_csp,
-        expected_fraction_missing,
-        variance_scale_fraction_missing,
-        gradient_convergence,
-        offset)
-
-    name_stem = f"{reference_peak_list.name}_{target_peak_list.name}"
-    outputResults(matchingProbabilities.numpy(),
-                  posteriorMatchingDistribution.csp_posterior_probabilities.exp(),
-                  distances_squared_normalized,
-                  (reference_peaks, reference_cs_column_names),
-                  (target_peaks, target_cs_column_names),
-                  output_directory / f"{name_stem}_transferred.csv",
-                  output_directory / f"{name_stem}_transferred_HC.csv",
-                  output_directory / f"{name_stem}_transferred.list",
-                  output_directory / "Match_probabilities.csv",
-                  output_directory / "CSP_probabilities.csv",
-                  CSP_scaling_factors,
-                  confidence_cutoff)
-
-    GLOBAL_LOGGER.info("Outputing plots")
-    fig = buildPlot(matchingProbabilities,
-                    posteriorMatchingDistribution.csp_mixture_weights.exp().detach().cpu().numpy(),
-                    posteriorMatchingDistribution.no_csp_distribution,
-                    posteriorMatchingDistribution.csp_distribution,
-                    distances_squared_normalized.detach(),
-                    0.50)
-    GLOBAL_LOGGER.info(f"Output Directory: {output_directory}")
-    fig.savefig(output_directory / f"{name_stem}_fittedDistributions.png")
-    if display_distributions:
-        fig.show()
-
-    GLOBAL_LOGGER.info(f"Final Offset: {offset} ")
-    GLOBAL_LOGGER.info("Done")
-    end_time = time.time()
-    elapsed_time = end_time - start_time
-    GLOBAL_LOGGER.info(f"Elapsed Time: {elapsed_time / 60.0:0.2f} min")
-    # print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
+        GLOBAL_LOGGER.exception(f"FatalError")
+        GLOBAL_LOGGER.exception(f"{e}")
 
 
 #
 def main():
-    global GLOBAL_LOGGER
     args = parseArguments()
-
-    print("LogFile: ", args.log_file)
+    GLOBAL_LOGGER = None
     standalone_match_peaks(args.reference_peak_list,
                             args.reference_cs_column_names,
                             args.reference_peak_list_error,

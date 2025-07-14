@@ -2,6 +2,9 @@ import torch
 import torch.distributions as torchdist
 import numpy as np
 from torch.profiler import record_function
+
+class SamplingError(Exception):
+    pass
 def logisticDistribution(loc,scale):
     base_distribution = torchdist.Uniform(0, 1)
     transforms = [torchdist.transforms.SigmoidTransform().inv, torchdist.transforms.AffineTransform(loc=loc, scale=scale)]
@@ -182,8 +185,17 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         row_log_evidence = self._base_row_decision_likelihoods_unnormalized.logsumexp(dim=-1)
         row_log_evidence = torch.where(availableRows, row_log_evidence.unsqueeze(0), -torch.inf)
         while availableRows.any():
-            self.__getNextInSequence(sample, sample_indexes, availableRows, availableCols, row_log_evidence, sample_weights,decision_log,decision_counter)
-            self._resample(sample, sample_weights, row_log_evidence, availableRows,availableCols,decision_log)
+            try:
+                self.__getNextInSequence(sample, sample_indexes, availableRows, availableCols, row_log_evidence, sample_weights,decision_log,decision_counter)
+                self._resample(sample, sample_weights, row_log_evidence, availableRows,availableCols,decision_log)
+            except Exception as e:
+                raise SamplingError(f"Error during sampling of matching matrices \n"
+                                    f"Step: {decision_counter} of {availableRows.shape[0]} \n"
+                                    f"CSP Distribution Parameters: {self.csp_distribution.params} \n"
+                                    f"CSP_weight logits: {self._csp_mixture_weights} probits: {(self._csp_mixture_weights-self._csp_mixture_weights.logsumexp(dim=0,keepdim=True)).exp()}\n"
+                                    f"matching_weight_logits: {self._matching_mixture_weights} probits: {(self._matching_mixture_weights - self._matching_mixture_weights.logsumexp(dim=0,keepdim=True)).exp()}\n"
+                                    f"missing_weight_logits: {self._missing_mixture_weights} probits: {(self._missing_mixture_weights - self._missing_mixture_weights.logsumexp(dim=0,keepdim=True)).exp()}\n") from e
+
             decision_counter += 1
         self._resample(sample, sample_weights, row_log_evidence, availableRows,availableCols,decision_log,True)
         #assert torch.abs(self.log_prob(sample) - partial_log_likelihood.sum()) <= 1
