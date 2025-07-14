@@ -475,12 +475,12 @@ def runEM(distances_squared_normalized: torch.tensor,
 
 def isPositive(x):
     if float(x) > 0:
-        return True
+        return float(x)
     else:
         argparse.ArgumentTypeError("Value must be > than 0")
 def isBetween0And1(x):
     if 0.0 <= float(x) <= 1.0:
-        return True
+        return float(x)
     else:
         argparse.ArgumentTypeError("Value must be between 0.0 and 1.0.")
 
@@ -583,12 +583,14 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
     match_std = expected_match_ratio * expected_missing_ratio
     matching_mixture_priors = calculateBetaParametersFromMeanAndVariance(mean=expected_match_ratio,
                                                                          variance=variance_scale_fraction_missing * match_std ** 2)  # [matching, nonmatching)
-    fraction_possible_matched_rows = min(1,distances_squared_normalized.shape[1]/distances_squared_normalized.shape[0])
+    fraction_possible_matched_rows = min(1,float(distances_squared_normalized.shape[1])/distances_squared_normalized.shape[0])
     max_fraction_missing_rows = 1 - fraction_possible_matched_rows
     expected_fraction_missing_rows =  max(expected_fraction_missing,1-(1-max_fraction_missing_rows)*(1-expected_fraction_missing))
+    GLOBAL_LOGGER.info(
+        f"fraction_possilbe_matched_rows: {fraction_possible_matched_rows}, expected_fraction_missing_rows: {expected_fraction_missing_rows}, expected_fraction_missing: {expected_fraction_missing}")
     missing_mixture_priors = calculateBetaParametersFromMeanAndVariance(mean=1.0 - expected_fraction_missing_rows,
                                                                         variance=variance_scale_fraction_missing * expected_fraction_missing_rows ** 2)
-    GLOBAL_LOGGER.info(f"fraction_possilbe_matched_rows: {fraction_possible_matched_rows}, expected_fraction_missing_rows: {expected_fraction_missing_rows}, expected_fraction_missing: {expected_fraction_missing} MissingMixture_priors: {missing_mixture_priors}")
+    GLOBAL_LOGGER.info(f" MissingMixture_priors: {missing_mixture_priors}")
     initial_missing_mixture_weights = missing_mixture_priors.log().detach().clone()
     initial_matching_mixture_weights = matching_mixture_weights.detach().clone()
     initial_csp_mixture_weights = csp_mixture_weights.detach().clone()
