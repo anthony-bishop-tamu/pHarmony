@@ -17,6 +17,7 @@ standalone_match_peaks(reference_list,['w1','w2'], [0.015,0.0015],
                         output_directory,
                         0.1,2.0,
                         0.1,2.0,
+                        0.1,
                         1E-5,
                         False,False,0.9, [0.101,1],log_level=20,log_file=True
                          )
@@ -31,5 +32,6 @@ standalone_match_peaks(reference_list,['w1','w2'], [0.03,0.003],
                         output_directory,
                         0.1,2.0,
                         0.1,2.0,
+                        0.1,
                         1E-5,
-                        False,False,0.9, [0.101,1], log_level=20)
+                        False,False,0.9, [0.101,1], log_level=20,log_file=True)

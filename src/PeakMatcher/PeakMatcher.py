@@ -39,7 +39,7 @@ def setup_logger(
     log_file = None,
     *,
     level: int = logging.INFO,
-    overwrite: bool = False,
+    overwrite: bool = True,
     keep_console: bool = True,
 ) -> logging.Logger:
 
@@ -210,7 +210,7 @@ def EM_minimization_function(samples, dist: CSPDetectionDistribution,
     #positionProb = calculatePositionProb(samples, dist._distances.shape)
 
     quantile_regularization = torch.relu((3 - dist.csp_distribution.quantile(torch.tensor([0.001])))*10)**6
-    quantile_regularization += torch.relu(max_predicted_dnm-(dist.csp_distribution.quantile(torch.tensor([0.99])))*10)**6
+    quantile_regularization += torch.relu(max_predicted_dnm-dist.csp_distribution.quantile(torch.tensor([0.95])))**6
 
     loss = (-1 * logLikelihoodTerm +
             -1*((csp_mixture_priors-1.0)*csp_mixture_weights).sum()+
@@ -553,12 +553,12 @@ def determineSampleSize(startingSample,dist):
 #
 def MatchPeaks(reference_peak_positions: torch.Tensor,
                target_peak_positions: torch.Tensor,
-               expected_fraction_csp: float = 0.1,
-               variance_scale_fraction_csp: float = 2.0,
-               expected_fraction_missing: float = 0.1,
-               variance_scale_fraction_missing: float = 2.0,
-               max_predicted_dnm: float = 500,
-               gradient_convergence: float = 1E-5,
+               expected_fraction_csp,
+               variance_scale_fraction_csp,
+               expected_fraction_missing,
+               variance_scale_fraction_missing,
+               max_predicted_dnm,
+               gradient_convergence,
                fixedOffset: torch.Tensor = None):
 
     global GLOBAL_LOGGER
@@ -595,6 +595,7 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
     missing_mixture_priors = calculateBetaParametersFromMeanAndVariance(mean=1.0 - expected_fraction_missing_rows,
                                                                         variance=variance_scale_fraction_missing * expected_fraction_missing_rows ** 2)
     GLOBAL_LOGGER.info(f" MissingMixture_priors: {missing_mixture_priors}")
+    GLOBAL_LOGGER.info(f"max_predicted_dnm: {max_predicted_dnm}")
 
 
     initial_missing_mixture_weights = missing_mixture_priors.log().detach().clone()
