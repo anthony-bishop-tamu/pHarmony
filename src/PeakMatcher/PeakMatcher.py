@@ -1,5 +1,6 @@
 import os
 
+import scipy
 import numpy as np
 import torch
 import pandas as pd
@@ -7,8 +8,9 @@ import sys
 import argparse
 from .CSPDetectionDistribution import CSPDetectionDistribution
 from .OutputHandling import buildPlot, outputResults
-from .Frechet import Frechet, UniformDistanceSquared
+from .Frechet import Frechet, UniformDistanceSquared, RegFrechet
 from pathlib import Path
+from torch.distributions import Beta
 import time
 import logging
 from ._version import __version__
@@ -75,7 +77,7 @@ def calculateBetaParametersFromMeanAndVariance(mean, variance):
     beta = (1-mean)*mu
 
     return torch.tensor([alpha, beta],dtype=torch.float64)
-def initalizeAllComponents(distances, dims):
+def initalizeAllComponents(distances, dims, max_predicted_dm, max_CSP_count):
     csp_conditional_assignments = torch.ones_like(distances)*0.05
     csp_conditional_assignments[distances < 3] = 0.95
     csp_conditional_assignments = torch.stack((csp_conditional_assignments,1.0-csp_conditional_assignments),dim=2).log()
@@ -98,8 +100,9 @@ def initalizeAllComponents(distances, dims):
     csp_weights = initial_weights[:,:,1]
     no_matching_weights = initial_weights[:,:,2]
 
-    csp_distribution = Frechet(alpha=torch.tensor([2.5],dtype=torch.float64),
-                                     scale=torch.tensor([30], dtype=torch.float64))
+    csp_distribution = RegFrechet(torch.tensor([1],dtype=torch.float64,requires_grad=True),
+                                     max_predicted_dm,
+                                     max_CSP_count)
 
     non_matching_distribution = UniformDistanceSquared(dim=torch.tensor(dims,dtype=torch.float64),
                                                        Rmax=distances.max(dim=-1)[0])
@@ -209,8 +212,9 @@ def EM_minimization_function(samples, dist: CSPDetectionDistribution,
 
     #positionProb = calculatePositionProb(samples, dist._distances.shape)
 
-    quantile_regularization = torch.relu((3 - dist.csp_distribution.quantile(torch.tensor([0.001])))*10)**6
-    quantile_regularization += torch.relu(max_predicted_dnm-dist.csp_distribution.quantile(torch.tensor([0.95])))**6
+    #quantile_regularization = torch.relu((3 - dist.csp_distribution.quantile(torch.tensor([0.001])))*10)**6
+    #quantile_regularization += torch.relu(max_predicted_dnm-dist.csp_distribution.quantile(torch.tensor([0.95])))**6
+    quantile_regularization = 0
 
     loss = (-1 * logLikelihoodTerm +
             -1*((csp_mixture_priors-1.0)*csp_mixture_weights).sum()+
@@ -302,9 +306,9 @@ def maximization(samples: tuple,
         #    csp_distribution.alpha.clamp_(min=1.0)
         if i % 1 == 0:
             GLOBAL_LOGGER.verbose("Step=%6d Loss=%12.3e, diff=%12.3e, csp_alpha=%12.3e, csp_scale=%12.3e csp_alpha_grad=%12.3e csp_scale_grad=%12.3e, lr=%12.3e csp_dist_var= %12.3e max_predicted_dnm=%12.3e", i,loss.item(), prevLoss-loss.item(), csp_distribution.alpha.item(), csp_distribution.scale.item(),
-              csp_distribution.alpha.grad.item(), csp_distribution.scale.grad.item(), optimizer.param_groups[0]['lr'], csp_distribution.variance(), max_predicted_dm)
+              csp_distribution.alpha.grad.item(), optimizer.param_groups[0]['lr'], csp_distribution.variance(), max_predicted_dm)
         #
-        if not (torch.tensor([csp_distribution.alpha,csp_distribution.scale,csp_distribution.alpha.grad,csp_distribution.scale.grad]).isfinite().all() and
+        if not (torch.tensor([csp_distribution.alpha,csp_distribution.alpha.grad]).isfinite().all() and
             csp_distribution.alpha.item() > 0 and csp_distribution.scale.item() > 0 and prevLoss-loss.item() >= -1E-3):
             with torch.no_grad():
                 csp_distribution.alpha[0] = previous_alpha[0]
@@ -313,7 +317,7 @@ def maximization(samples: tuple,
 
             GLOBAL_LOGGER.verbose("Lowering Learning rate")
             continue
-        elif prevLoss - loss.item() < 1e-7 and (torch.abs(torch.tensor([csp_distribution.alpha.grad,csp_distribution.scale.grad])) < gradient_convergence).all():
+        elif prevLoss - loss.item() < 1e-7 and (torch.abs(torch.tensor([csp_distribution.alpha.grad])) < gradient_convergence).all():
             break
 
         prevLoss = loss.item()
@@ -362,7 +366,7 @@ def runEMStep(distances: torch.tensor,
                      missing_mixture_priors,
                      max_predicted_dnm,
                      csp_distribution,
-                     [csp_distribution.alpha,csp_distribution.scale],
+                     [csp_distribution.alpha],
                      non_matching_distribution,
                      learning_rate,
                      gradient_convergence)
@@ -457,10 +461,6 @@ def runEM(distances_squared_normalized: torch.tensor,
                                                                                   previous_csp_dist_params,
                                                                                   0.05,0.05)
 
-        #GLOBAL_LOGGER.info(f"CSP_posterior_converged?:{csp_distribution_converged}, {csp_max:.3e}<0.10?")
-        #GLOBAL_LOGGER.info(f"matching_posterior_converged?:{nonMatching_distribution_converged}, {nonMatching_max:.3e}<0.10?")
-
-        #GLOBAL_LOGGER.info(f"CSP_distribution converged:{csp_dist_converged}, {csp_dist_max:.3e}")
 
 
         if csp_distribution_converged and i >= minSteps and nonMatching_distribution_converged and csp_dist_converged:
@@ -497,7 +497,7 @@ def parseArguments():
     parser.add_argument('--target_peak_list_error', required=True, type=isPositive, nargs='+', help='Uncertainty in each dimension for the target peak list (e.g. \" 0.0015, 0.015 \" for a 2D HSQC [15N, 1H]')
     #parser.add_argument("--minimum_distance", type=float, help="Minimum normalized distance between two peaks, all normalized distances lower than this value will be set to this value",default=0.005)
     parser.add_argument('--expected_fraction_csp', type=isBetween0And1, help="Estimate of the fraction of peaks expected to undergo a chemical shift perturbation", default=0.05)
-    parser.add_argument("--variance_scale_fraction_csp",type=isPositive, help="scaling factor for variance of the prior distribution of csp distribution weight", default=5.0)
+    parser.add_argument("--variance_scale_fraction_csp",type=isPositive, help="scaling factor for variance of the prior distribution of csp distribution weight", default=1.0)
     parser.add_argument('--expected_fraction_missing', type=isBetween0And1, help="Estimate of the fraction of peaks that you think will be missing between spectra", default=0.02)
     parser.add_argument("--variance_scale_fraction_missing",type=isPositive, help="scaling factor for variance of the prior distribution of matching distribution weight", default=2.0)
     parser.add_argument("--expected_max_csp", type=isPositive, help="Estimate of the maximum expected CSP (ppm); Default is in units of proton ppm", default=0.1)
@@ -573,13 +573,12 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
     dims = reference_peak_positions.shape[-2]
 
     distances_squared_normalized = calculateDistancesSquaredNormalized(reference_peak_positions, target_peak_positions, offset)
-    csp_distribution, non_matching_distribution, csp_mixture_weights, matching_mixture_weights = initalizeAllComponents(distances_squared_normalized.detach(),dims)
+
 
     #build priors
-    expected_no_csp_ratio = 1.0 - expected_fraction_csp
     no_csp_std = expected_fraction_csp  # Std deviation is arbitrarily set to being the same as the expected fraction csp
 
-    csp_mixture_priors = calculateBetaParametersFromMeanAndVariance(mean=expected_no_csp_ratio,
+    csp_mixture_priors = calculateBetaParametersFromMeanAndVariance(mean=expected_fraction_csp,
                                                                     variance=variance_scale_fraction_csp * no_csp_std ** 2)  # [no csp, csp ] (Given a match!)
 
     expected_missing_ratio = expected_fraction_missing
@@ -595,7 +594,13 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
     missing_mixture_priors = calculateBetaParametersFromMeanAndVariance(mean=1.0 - expected_fraction_missing_rows,
                                                                         variance=variance_scale_fraction_missing * expected_fraction_missing_rows ** 2)
     GLOBAL_LOGGER.info(f" MissingMixture_priors: {missing_mixture_priors}")
-    GLOBAL_LOGGER.info(f"max_predicted_dnm: {max_predicted_dnm}")
+
+
+    max_fraction_csp = scipy.stats.beta.ppf(0.95,csp_mixture_priors[0],csp_mixture_priors[1])
+    max_CSP_count=(1-expected_fraction_missing_rows)*distances_squared_normalized.shape[0]*max_fraction_csp
+    csp_distribution, non_matching_distribution, csp_mixture_weights, matching_mixture_weights = initalizeAllComponents(
+        distances_squared_normalized.detach(), dims, max_predicted_dnm, max_CSP_count=max_CSP_count)
+    GLOBAL_LOGGER.info(f"max_predicted_dnm: {max_predicted_dnm}, Max expected CSPs{max_CSP_count}")
 
 
     initial_missing_mixture_weights = missing_mixture_priors.log().detach().clone()

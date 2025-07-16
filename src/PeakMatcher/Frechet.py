@@ -4,10 +4,9 @@ class Frechet(torch.distributions.Distribution):
     arg_constraints = {'alpha': constraints.positive, 'scale': constraints.positive}
     support = constraints.positive  # Support of the distribution (x > 0)
 
-    def __init__(self, alpha, scale, loc=0, validate_args=None):
-        self.alpha = alpha.detach().clone().requires_grad_(True)  # Shape parameter (fitted_c from SciPy)
-        self.scale = scale.detach().clone().requires_grad_(True)  # Scale parameter (fitted_scale from SciPy)
-        self.loc = loc
+    def __init__(self, alpha, scale, validate_args=None):
+        self.alpha = alpha  # Shape parameter (fitted_c from SciPy)
+        self.scale = scale.detach() # Scale parameter (fitted_scale from SciPy)
         super(Frechet, self).__init__(torch.Size(), validate_args=validate_args)
 
     def sample(self, sample_shape=torch.Size()):
@@ -19,17 +18,17 @@ class Frechet(torch.distributions.Distribution):
 
     def log_prob(self, x):
         # Log probability of the Fréchet distribution
-        z = (x - self.loc) / self.scale
+        z = x / self.scale
         return torch.log(self.alpha)  - torch.log(self.scale) - (self.alpha + 1) * torch.log(z) - z ** (-self.alpha)
 
     def median(self):
-        return (self.scale/torch.pow(torch.log(torch.tensor([2.0])), 1.0/self.alpha)) + self.loc
+        return (self.scale/torch.pow(torch.log(torch.tensor([2.0])), 1.0/self.alpha))
 
     def mode(self):
-        return self.scale*torch.pow(self.alpha/(1+self.alpha), 1.0/self.alpha) + self.loc
+        return self.scale*torch.pow(self.alpha/(1+self.alpha), 1.0/self.alpha)
 
     def quantile(self, p):
-        return self.scale*torch.pow(-torch.log(p),-1.0/self.alpha) + self.loc
+        return self.scale*torch.pow(-torch.log(p),-1.0/self.alpha)
 
     def variance(self):
         if self.alpha < 2.0:
@@ -38,7 +37,7 @@ class Frechet(torch.distributions.Distribution):
             return self.scale*self.scale*(torch.lgamma(1-2.0/self.alpha).exp() - torch.lgamma(1-1.0/self.alpha).exp()**2)
         #
     def params(self):
-        return torch.tensor([self.alpha, self.scale, self.loc],dtype=self.alpha.dtype,device=self.alpha.device)
+        return torch.tensor([self.alpha, self.scale],dtype=self.alpha.dtype,device=self.alpha.device)
 class RadialFrechet(Frechet):
     def __init__(self, alpha, scale, dim, loc=0, validate_args=None):
         self._dim = dim
@@ -61,7 +60,10 @@ class RadialChi2(torch.distributions.Chi2):
         radialScale = torch.log(x)*(self.df - 1.0) - self._radialFactor
         return chi2 + radialScale
     #
-
+class RegFrechet(Frechet):
+    def __init__(self, alpha, max_val, n, validate_args=None):
+        beta = torch.pow(max_val,alpha)*torch.log(torch.tensor([2.0]))/n
+        super(RegFrechet, self).__init__(alpha, beta, validate_args=validate_args)
 class UniformDistanceSquared(torch.distributions.Distribution):
     arg_constraints = {'_dim': constraints.positive, '_Rmax': constraints.positive}
     def __init__(self,dim, Rmax, validate_args=None):
