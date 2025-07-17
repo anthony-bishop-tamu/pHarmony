@@ -118,9 +118,9 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
         decision_log[sample_indicies,decision_counter,0] = sampled_rows.type(torch.float64)
         decision_log[sample_indicies, decision_counter, 2] = row_decision_matrix[sampled_rows, matched_columns].type(torch.float64) #+row_probabilities
-        decision_log[sample_indicies,decision_counter, 3] += probabilities[sample_indicies, matched_columns].type(torch.float64)
+        decision_log[sample_indicies,decision_counter, 3] = probabilities[sample_indicies, matched_columns].type(torch.float64)
 
-        sample_weights += self._base_row_decision_likelihoods_unnormalized[sampled_rows,matched_columns] - (decision_log[:, decision_counter, 3] + row_probs[sample_indicies,sampled_rows])
+        sample_weights += self._base_row_decision_likelihoods_unnormalized[sampled_rows,matched_columns] - (decision_log[sample_indicies, decision_counter, 3].log() + row_probs[sample_indicies,sampled_rows].log())
         assert sample_weights.isfinite().all()
 
 
@@ -154,7 +154,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         ess = 1.0/torch.pow(normalized_weights,2).sum()
         nsamples = np.prod(sample.shape[0:-1])
         #print(f"ESS ratio:, {ess/sample_weights.shape[0]:0.3f}")
-        if ess < nsamples*0.1 or force_resample:
+        if ess < nsamples*0.5 or force_resample:
             # Step 1: Create systematic positions
             positions = (torch.arange(nsamples, dtype=sample_weights.dtype, device=sample_weights.device) +
                          torch.rand(1,dtype=sample_weights.dtype,device=sample_weights.device)) / nsamples
