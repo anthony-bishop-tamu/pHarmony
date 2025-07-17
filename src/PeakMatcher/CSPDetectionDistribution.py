@@ -80,7 +80,45 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         with record_function("decision_exponentiation"):
             self._base_row_decision_probabilities = self._base_row_decision_likelihoods.exp()
 
+    def _masked_row_entropies_lowmem(self,
+            data: torch.Tensor,  # (m, n)
+            row_mask: torch.Tensor,  # (z, m)  bool
+            col_mask: torch.Tensor,  # (z, n)  bool
+            eps: float = 1e-12
+    ) -> torch.Tensor:
+        """
+        Entropy of every (sample z, row m) after per-sample column masking,
+        while skipping allocation of a (z × m × n) tensor.
 
+        Excluded rows (`row_mask == False`) return +inf.
+        """
+
+        m, n = data.shape
+        z = col_mask.shape[0]
+
+        # -- 1.  Pre-compute p · log p  ------------------------------
+        p = data  # (m, n)
+        p_log_p = p * (p.clamp_min(eps).log())  # (m, n)
+
+        # -- 2.  Matmul with the per-sample column masks ----------
+        cm = col_mask.to(p.dtype)  # (z, n)
+
+        row_sum = cm @ p.T  # (z, m)   Σ mask · p
+        numer = cm @ p_log_p.T  # (z, m)   Σ mask · p log p
+
+        # -- 3.  Renormalised entropy -----------------------------
+        row_sum_safe = row_sum + eps  # avoid /0 & log(0)
+
+        H = -numer / row_sum_safe + row_sum_safe.log()
+
+        # -- 4.  Masks for excluded rows --------------------------
+        H = torch.where(row_mask, H, torch.full_like(H, float('inf')))
+
+        # optional: if *all* columns were masked (row_sum == 0) you might
+        # prefer 0 instead of NaN/inf; uncomment if so:
+        H = torch.where(row_sum == 0, torch.zeros_like(H), H)
+
+        return H
 
 
     def __getNextInSequence(self, sample: torch.tensor, sample_indicies: torch.tensor,
@@ -95,14 +133,14 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         row_decision_matrix = self._base_row_decision_probabilities.detach()
 
         #row_log_evidence[...] = 0
-        alpha = 1000
-        row_log_evidence_alpha = row_log_evidence*alpha
+        entropy = self._masked_row_entropies_lowmem(row_decision_matrix,availableRows,availableCols)
+        free_energy = row_log_evidence - entropy
 
         #prob_tensor = availableRows.type(torch.float64)
         #row_index_list = torch.nonzero(availableRows.type(torch.float64), as_tuple=True)[1].reshape(sample.shape[0],-1)
         with record_function("Row_Sampling"):
-            row_log_evidence_alpha[~availableRows] = -torch.inf
-            row_probs = (row_log_evidence_alpha - row_log_evidence_alpha.logsumexp(dim=-1,keepdim=True)).exp()
+            free_energy[~availableRows] = -torch.inf
+            row_probs = (free_energy-free_energy.logsumexp(dim=-1,keepdim=True)).exp()
             sampled_rows = torch.multinomial(row_probs,num_samples=1,replacement=True).type(torch.int32).squeeze(1)
             #print(sampled_rows.unique().shape)
             #sampled_rows = row_index_list[torch.arange(sample.shape[0]),sampled_rows]
@@ -139,9 +177,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         assert not new.isnan().any()
         row_log_evidence[sample_indicies[~no_matched_columns],...] = new[sample_indicies[~no_matched_columns],...]
 
-
 #
-
     def _resample(self, sample: torch.Tensor,
                   sample_weights: torch.Tensor,
                   row_log_evidence: torch.Tensor,
