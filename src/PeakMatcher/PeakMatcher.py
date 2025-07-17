@@ -586,15 +586,16 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
     match_std = expected_match_ratio * expected_missing_ratio
     matching_mixture_priors = calculateBetaParametersFromMeanAndVariance(mean=expected_match_ratio,
                                                                          variance=variance_scale_fraction_missing * match_std ** 2)  # [matching, nonmatching)
-    fraction_possible_matched_rows = min(1,float(distances_squared_normalized.shape[1])/distances_squared_normalized.shape[0])
-    max_fraction_missing_rows = 1 - fraction_possible_matched_rows
-    expected_fraction_missing_rows =  max(expected_fraction_missing,1-(1-max_fraction_missing_rows)*(1-expected_fraction_missing))
-    GLOBAL_LOGGER.info(
-        f"fraction_possilbe_matched_rows: {fraction_possible_matched_rows}, expected_fraction_missing_rows: {expected_fraction_missing_rows}, expected_fraction_missing: {expected_fraction_missing}")
+    #fraction_possible_matched_rows = min(1,float(distances_squared_normalized.shape[1])/distances_squared_normalized.shape[0])
+    #max_fraction_missing_rows = 1 - fraction_possible_matched_rows
+    #expected_fraction_missing_rows =  max(expected_fraction_missing,1-(1-max_fraction_missing_rows)*(1-expected_fraction_missing))
+    expected_fraction_missing_rows = expected_fraction_missing
+    #GLOBAL_LOGGER.info(
+    #    f"fraction_possilbe_matched_rows: {fraction_possible_matched_rows}, expected_fraction_missing_rows: {expected_fraction_missing_rows}, expected_fraction_missing: {expected_fraction_missing}")
     missing_mixture_priors = calculateBetaParametersFromMeanAndVariance(mean=1.0 - expected_fraction_missing_rows,
                                                                         variance=variance_scale_fraction_missing * expected_fraction_missing_rows ** 2)
     GLOBAL_LOGGER.info(f" MissingMixture_priors: {missing_mixture_priors}")
-
+    GLOBAL_LOGGER.info(f" Number of reference peaks, target peaks {tuple(distances_squared_normalized.shape)}")
 
     max_fraction_csp = scipy.stats.beta.ppf(0.95,csp_mixture_priors[0],csp_mixture_priors[1])
     max_CSP_count=(1-expected_fraction_missing_rows)*distances_squared_normalized.shape[0]*max_fraction_csp
