@@ -154,7 +154,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         ess = 1.0/torch.pow(normalized_weights,2).sum()
         nsamples = np.prod(sample.shape[0:-1])
         #print(f"ESS ratio:, {ess/sample_weights.shape[0]:0.3f}")
-        if ess < nsamples*0.1 or force_resample:
+        if ess < nsamples*0.5 or force_resample:
             # Step 1: Create systematic positions
             positions = (torch.arange(nsamples, dtype=sample_weights.dtype, device=sample_weights.device) +
                          torch.rand(1,dtype=sample_weights.dtype,device=sample_weights.device)) / nsamples
