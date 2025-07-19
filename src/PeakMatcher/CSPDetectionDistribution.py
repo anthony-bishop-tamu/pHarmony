@@ -1,6 +1,7 @@
 import torch
 import torch.distributions as torchdist
 import numpy as np
+from sympy.stats.rv import probability
 from torch.profiler import record_function
 
 class SamplingError(Exception):
@@ -80,6 +81,17 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         #with record_function("decision_exponentiation"):
         #    self._base_row_decision_probabilities = self._base_row_decision_likelihoods.exp()
 
+    def calculateLogAij(self,sample_decision_matrix: torch.tensor):
+        log_M_original = sample_decision_matrix.logsumexp(dim=-1,keepdim=True)
+        log_M = log_M_original + torch.log1p(-1*torch.exp(sample_decision_matrix[...,:-1]-log_M_original))
+        log_M = torch.where(log_M.isfinite(),log_M,-torch.inf)
+        log_M = torch.cat([log_M, log_M_original],dim=2)
+        log_Mtot= log_M.logsumexp(dim=-2,keepdim=True)
+        log_Aij = log_Mtot + torch.log1p(-1*torch.exp(log_M - log_Mtot))
+        log_Aij=torch.where(log_Aij.isfinite(),log_Aij,-torch.inf)
+
+        return log_Aij
+
 
 
 
@@ -90,23 +102,24 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                             sample_weights: torch.tensor,
                             decision_log: torch.tensor,
                             decision_counter: int):
-
-        flattened_decision_matrix = sample_decision_matrix.reshape(sample_decision_matrix.shape[0],-1)
-        Z_decision = flattened_decision_matrix.sum(dim=-1)
-        sampled_row_column_pairs = torch.multinomial(flattened_decision_matrix,num_samples=1,replacement=True).type(torch.int32).squeeze(1)
+        log_Aij = self.calculateLogAij(sample_decision_matrix)
+        probability_matrix = torch.where(log_Aij.isfinite(),sample_decision_matrix + log_Aij,sample_decision_matrix)
+        Z_weights = probability_matrix.logsumexp(dim=(-1,-2),keepdim=True)
+        assert Z_weights.isfinite().all()
+        probability_matrix -= Z_weights
+        sampled_row_column_pairs = torch.multinomial(probability_matrix.reshape(probability_matrix.shape[0],-1).exp(),num_samples=1,replacement=True).type(torch.int32).squeeze(1)
 
         sampled_rows, matched_columns = [ t.to(torch.int32) for t in torch.unravel_index(sampled_row_column_pairs,sample_decision_matrix.shape[1:]) ]
 
 
         no_matched_columns = matched_columns >= self._distances.shape[1]
 
-        #availableRows[sample_indicies, sampled_rows] = False
 
         decision_log[sample_indicies,decision_counter,0] = sampled_rows.type(torch.float64)
-        decision_log[sample_indicies, decision_counter, 2] = (flattened_decision_matrix[sample_indicies,sampled_row_column_pairs] / Z_decision[sample_indicies]).log()
+        decision_log[sample_indicies, decision_counter, 2] = probability_matrix[sample_indicies,sampled_rows,matched_columns].exp()
 
 
-        sample_weights += self._base_row_decision_likelihoods[sampled_rows,matched_columns] - decision_log[sample_indicies, decision_counter, 2]
+        sample_weights += torch.where(log_Aij[sample_indicies,sampled_rows,matched_columns].isfinite(),Z_weights.squeeze() - log_Aij[sample_indicies,sampled_rows,matched_columns],Z_weights.squeeze())
         assert sample_weights.isfinite().all()
 
 
@@ -117,8 +130,8 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         availableRows[sample_indicies, sampled_rows] = False
         availableCols[sample_indicies[~no_matched_columns], matched_columns[~no_matched_columns]] = False
 
-        sample_decision_matrix[sample_indicies,sampled_rows,:] = 0
-        sample_decision_matrix[sample_indicies[~no_matched_columns], :, matched_columns[~no_matched_columns]] = 0
+        sample_decision_matrix[sample_indicies,sampled_rows,:] = -torch.inf
+        sample_decision_matrix[sample_indicies[~no_matched_columns], :, matched_columns[~no_matched_columns]] = -torch.inf
 
 
 #
@@ -164,7 +177,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         decision_log = torch.full(sample_shape+(self._distances.shape[0],4),-2, dtype=torch.float64)
         decision_counter = 0
         sample_decision_matrix = torch.ones(sample_shape+self._base_row_decision_likelihoods.shape,dtype=torch.float64)
-        sample_decision_matrix[:,...] = (self._base_row_decision_likelihoods - self._base_row_decision_likelihoods.logsumexp(dim=(-1,-2),keepdim=True)).exp()
+        sample_decision_matrix[:,...] = self._base_row_decision_likelihoods.detach()
         while availableRows.any():
             try:
                 self.__getNextInSequence(sample, sample_indexes, availableRows, availableCols, sample_decision_matrix, sample_weights,decision_log,decision_counter)
