@@ -95,7 +95,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         row_decision_matrix = self._base_row_decision_probabilities.detach()
 
         #row_log_evidence[...] = 0
-        alpha = 1000
+        alpha = 100000000
         row_log_evidence_alpha = row_log_evidence*alpha
 
         #prob_tensor = availableRows.type(torch.float64)
@@ -117,10 +117,10 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         #availableRows[sample_indicies, sampled_rows] = False
 
         decision_log[sample_indicies,decision_counter,0] = sampled_rows.type(torch.float64)
-        decision_log[sample_indicies, decision_counter, 2] = row_decision_matrix[sampled_rows, matched_columns].type(torch.float64) #+row_probabilities
-        decision_log[sample_indicies,decision_counter, 3] += probabilities[sample_indicies, matched_columns].type(torch.float64)
+        decision_log[sample_indicies, decision_counter, 2] = row_probs[sample_indicies,sampled_rows].log() #+row_probabilities
+        decision_log[sample_indicies,decision_counter, 3] = probabilities[sample_indicies, matched_columns].type(torch.float64).log()
 
-        sample_weights += self._base_row_decision_likelihoods_unnormalized[sampled_rows,matched_columns] - (decision_log[:, decision_counter, 3] + row_probs[sample_indicies,sampled_rows])
+        sample_weights += self._base_row_decision_likelihoods_unnormalized[sampled_rows,matched_columns] - (decision_log[:, decision_counter, 3] + decision_log[:,decision_counter,2])
         assert sample_weights.isfinite().all()
 
 
