@@ -120,7 +120,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         decision_log[sample_indicies, decision_counter, 2] = row_decision_matrix[sampled_rows, matched_columns].type(torch.float64) #+row_probabilities
         decision_log[sample_indicies,decision_counter, 3] = probabilities[sample_indicies, matched_columns].type(torch.float64)
 
-        sample_weights += self._base_row_decision_likelihoods_unnormalized[sampled_rows,matched_columns] - (decision_log[sample_indicies, decision_counter, 3].log() + row_probs[sample_indicies,sampled_rows].log())
+        sample_weights += 1
         assert sample_weights.isfinite().all()
 
 
