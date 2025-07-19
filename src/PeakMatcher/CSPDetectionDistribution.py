@@ -95,7 +95,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         row_decision_matrix = self._base_row_decision_probabilities.detach()
 
         #row_log_evidence[...] = 0
-        alpha = 1000
+        alpha = 0
         row_log_evidence_alpha = row_log_evidence*alpha
 
         #prob_tensor = availableRows.type(torch.float64)
