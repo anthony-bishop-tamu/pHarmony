@@ -3,6 +3,7 @@ import torch.distributions as torchdist
 import numpy as np
 from sympy.stats.rv import probability
 from torch.profiler import record_function
+from .ProposalNet import ProposalTrainer
 
 class SamplingError(Exception):
     pass
@@ -19,7 +20,9 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                  matching_mixture_weights: torch.tensor,
                  missing_mixture_weights: torch.tensor,
                  csp_distribution: torch.distributions.Distribution,
-                 non_matching_distribution: torch.distributions.Distribution):
+                 non_matching_distribution: torch.distributions.Distribution,
+                 proposalTrainer: ProposalTrainer = None,
+                 ):
         super().__init__()
         #assert(distances.shape[0] >= distances.shape[1])
         assert((2,) == csp_mixture_weights.shape)
@@ -40,6 +43,11 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         self.max_float64 = torch.finfo(torch.float64).max
         self.min_float64 = torch.finfo(torch.float64).min
         self._event_shape = torch.Size([self._distances.shape[0],3])
+        if proposalTrainer is None:
+            self._proposalTrainer=ProposalTrainer()
+        else:
+            self._proposalTrainer=proposalTrainer
+
 
         self._loglikelihoodMatrix = torch.stack((self._no_csp_distribution.log_prob(self._distances).clamp(min=self.min_float64),
                                                 self._csp_distribution.log_prob(self._distances).clamp(min=self.min_float64),
@@ -81,16 +89,6 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         #with record_function("decision_exponentiation"):
         #    self._base_row_decision_probabilities = self._base_row_decision_likelihoods.exp()
 
-    def calculateLogAij(self,sample_decision_matrix: torch.tensor):
-        log_M_original = sample_decision_matrix.logsumexp(dim=-1,keepdim=True)
-        log_M = log_M_original + torch.log1p(-1*torch.exp(sample_decision_matrix[...,:-1]-log_M_original))
-        log_M = torch.where(log_M.isfinite(),log_M,-torch.inf)
-        log_M = torch.cat([log_M, log_M_original],dim=2)
-        log_Mtot= log_M.logsumexp(dim=-2,keepdim=True)
-        log_Aij = log_Mtot + torch.log1p(-1*torch.exp(log_M - log_Mtot))
-        log_Aij=torch.where(log_Aij.isfinite(),log_Aij,-torch.inf)
-
-        return log_Aij
 
 
 
@@ -98,28 +96,38 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
     def __getNextInSequence(self, sample: torch.tensor, sample_indicies: torch.tensor,
                             availableRows: torch.tensor,
                             availableCols: torch.tensor,
-                            sample_decision_matrix: torch.tensor,
                             sample_weights: torch.tensor,
                             decision_log: torch.tensor,
-                            decision_counter: int):
-        log_Aij = self.calculateLogAij(sample_decision_matrix)
-        probability_matrix = torch.where(log_Aij.isfinite(),sample_decision_matrix + log_Aij,sample_decision_matrix)
-        Z_weights = probability_matrix.logsumexp(dim=(-1,-2),keepdim=True)
-        assert Z_weights.isfinite().all()
-        probability_matrix -= Z_weights
-        sampled_row_column_pairs = torch.multinomial(probability_matrix.reshape(probability_matrix.shape[0],-1).exp(),num_samples=1,replacement=True).type(torch.int32).squeeze(1)
+                            decision_counter: int,
+                            train: bool = True):
+        #if train:
+        #   logits = self._proposalTrainer.train_step(self._base_row_decision_likelihoods,availableRows,availableCols,100,100).detach()
+        #   probability_matrix = self._base_row_decision_likelihoods.unsqueeze(0) + logits
+        #else:
+        self._proposalTrainer.net.train()
+        logits = self._proposalTrainer.net(self._base_row_decision_likelihoods,availableRows,availableCols)
+        probability_matrix = (self._base_row_decision_likelihoods.unsqueeze(0) + logits
+                                  )
 
-        sampled_rows, matched_columns = [ t.to(torch.int32) for t in torch.unravel_index(sampled_row_column_pairs,sample_decision_matrix.shape[1:]) ]
+        probability_matrix[~availableRows.unsqueeze(-1) & ~availableCols.unsqueeze(1)] = -torch.inf
+        normalized_probability_matrix = probability_matrix - probability_matrix.logsumexp(dim=(-1,-2),keepdim=True)
+        sampled_row_column_pairs = torch.multinomial(normalized_probability_matrix.reshape(normalized_probability_matrix.shape[0],-1).exp(),num_samples=1,replacement=True).type(torch.int32).squeeze(1)
+
+
+        sampled_rows, matched_columns = [ t.to(torch.int32) for t in torch.unravel_index(sampled_row_column_pairs,self._base_row_decision_likelihoods.shape) ]
 
 
         no_matched_columns = matched_columns >= self._distances.shape[1]
 
 
         decision_log[sample_indicies,decision_counter,0] = sampled_rows.type(torch.float64)
-        decision_log[sample_indicies, decision_counter, 2] = probability_matrix[sample_indicies,sampled_rows,matched_columns].exp()
+        decision_log[sample_indicies, decision_counter, 2] = probability_matrix[sample_indicies,sampled_rows,matched_columns]
 
 
-        sample_weights += torch.where(log_Aij[sample_indicies,sampled_rows,matched_columns].isfinite(),Z_weights.squeeze() - log_Aij[sample_indicies,sampled_rows,matched_columns],Z_weights.squeeze())
+        weight_update = self._base_row_decision_likelihoods[sampled_rows,matched_columns]-probability_matrix[sample_indicies,sampled_rows,matched_columns]
+        loss = self._proposalTrainer.simple_step(weight_update)
+
+        sample_weights += weight_update
         assert sample_weights.isfinite().all()
 
 
@@ -130,15 +138,14 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         availableRows[sample_indicies, sampled_rows] = False
         availableCols[sample_indicies[~no_matched_columns], matched_columns[~no_matched_columns]] = False
 
-        sample_decision_matrix[sample_indicies,sampled_rows,:] = -torch.inf
-        sample_decision_matrix[sample_indicies[~no_matched_columns], :, matched_columns[~no_matched_columns]] = -torch.inf
+        #sample_decision_matrix[sample_indicies,sampled_rows,:] = -torch.inf
+        #sample_decision_matrix[sample_indicies[~no_matched_columns], :, matched_columns[~no_matched_columns]] = -torch.inf
 
 
 #
 
     def _resample(self, sample: torch.Tensor,
                   sample_weights: torch.Tensor,
-                  sample_decision_matrix: torch.Tensor,
                   availableRows: torch.Tensor,
                   availableCols: torch.Tensor,
                   decision_log,
@@ -162,7 +169,6 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
             sample_weights[...] = 0
             availableRows[...,:] =availableRows[indices,:]
             availableCols[...,:] =availableCols[indices,:]
-            sample_decision_matrix[...,:] =sample_decision_matrix[indices,:]
             decision_log[...,...] =decision_log[indices,...]
         else:
             return
@@ -180,8 +186,8 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         sample_decision_matrix[:,...] = self._base_row_decision_likelihoods.detach()
         while availableRows.any():
             try:
-                self.__getNextInSequence(sample, sample_indexes, availableRows, availableCols, sample_decision_matrix, sample_weights,decision_log,decision_counter)
-                self._resample(sample, sample_weights, sample_decision_matrix, availableRows,availableCols,decision_log)
+                self.__getNextInSequence(sample, sample_indexes, availableRows, availableCols, sample_weights,decision_log,decision_counter)
+                self._resample(sample, sample_weights, availableRows,availableCols,decision_log)
             except Exception as e:
                 raise SamplingError(f"Error during sampling of matching matrices \n"
                                     f"Step: {decision_counter} of {availableRows.shape[0]} \n"
@@ -191,7 +197,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                                     f"missing_weight_logits: {self._missing_mixture_weights} probits: {(self._missing_mixture_weights - self._missing_mixture_weights.logsumexp(dim=0,keepdim=True)).exp()}\n") from e
 
             decision_counter += 1
-        self._resample(sample, sample_weights, sample_decision_matrix, availableRows,availableCols,decision_log,True)
+        self._resample(sample, sample_weights, availableRows,availableCols,decision_log,True)
         #assert torch.abs(self.log_prob(sample) - partial_log_likelihood.sum()) <= 1
         return sample
 
