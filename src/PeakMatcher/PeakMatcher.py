@@ -101,8 +101,8 @@ def initalizeAllComponents(distances, dims, max_predicted_dm, max_CSP_count):
     no_matching_weights = initial_weights[:,:,2]
 
     csp_distribution = RegFrechet(torch.tensor([1],dtype=torch.float64,requires_grad=True),
-                                     max_predicted_dm,
-                                     max_CSP_count)
+                                     torch.tensor([max_predicted_dm],dtype=torch.float64),
+                                     torch.tensor([max_CSP_count],dtype=torch.float64))
 
     non_matching_distribution = UniformDistanceSquared(dim=torch.tensor(dims,dtype=torch.float64),
                                                        Rmax=distances.max(dim=-1)[0])
@@ -212,9 +212,9 @@ def EM_minimization_function(samples, dist: CSPDetectionDistribution,
 
     #positionProb = calculatePositionProb(samples, dist._distances.shape)
 
-    #quantile_regularization = torch.relu((3 - dist.csp_distribution.quantile(torch.tensor([0.001])))*10)**6
+    quantile_regularization = torch.relu((3 - dist.csp_distribution.quantile(torch.tensor([0.001])))*10)**6
     #quantile_regularization += torch.relu(max_predicted_dnm-dist.csp_distribution.quantile(torch.tensor([0.95])))**6
-    quantile_regularization = 0
+    #quantile_regularization = 0
 
     loss = (-1 * logLikelihoodTerm +
             -1*((csp_mixture_priors-1.0)*csp_mixture_weights).sum()+
@@ -302,6 +302,7 @@ def maximization(samples: tuple,
             previous_alpha = csp_distribution.alpha.detach().clone()
             previous_scale = csp_distribution.scale.detach().clone()
         optimizer.step()
+        csp_distribution = Frechet(csp_distribution.alpha,csp_distribution.scale)
         #with torch.no_grad():
         #    csp_distribution.alpha.clamp_(min=1.0)
         if i % 1 == 0:
@@ -326,7 +327,7 @@ def maximization(samples: tuple,
         #
 
 
-    return distances
+    return csp_distribution
 def runEMStep(distances: torch.tensor,
               csp_mixture_weights: torch.tensor,
               matching_mixture_weights: torch.tensor,
@@ -356,7 +357,7 @@ def runEMStep(distances: torch.tensor,
         csp_mixture_weights, matching_mixture_weights,missing_mixture_weights = calculateMixtureWeights(dist.csp_posterior_probabilities,positionProbs,
                                                                                                         csp_mixture_priors,matching_mixture_priors,missing_mixture_priors)
         #maximization step
-        maximization(samples,
+        csp_distribution = maximization(samples,
                      distances.detach(),
                      csp_mixture_weights.log(),
                      matching_mixture_weights.log(),
@@ -419,7 +420,7 @@ def runEM(distances_squared_normalized: torch.tensor,
     matching_probs = initial_matching_probs
     for i in range(maxEMSteps):
         previous_dist = dist
-        previous_csp_dist_params = previous_dist.csp_distribution.params()
+        previous_csp_dist_params = previous_dist.csp_distribution.param.detach().clone()
         previous_matching_probs = matching_probs
         samples, csp_mixture_weights, matching_mixture_weights, missing_mixture_weights, csp_distribution, non_matching_distribution = runEMStep(
             distances_squared_normalized,
@@ -456,14 +457,14 @@ def runEM(distances_squared_normalized: torch.tensor,
             0.05,
             0.10)
         GLOBAL_LOGGER.info("CSP distribution convergece")
-        GLOBAL_LOGGER.info(f"CSP_dist: { dist.csp_distribution.params() }")
-        csp_dist_converged, csp_dist_mean, csp_dist_max = verifyTensorConvergence(dist.csp_distribution.params(),
-                                                                                  previous_csp_dist_params,
-                                                                                  0.05,0.05)
+        GLOBAL_LOGGER.info(f"CSP_dist: { dist.csp_distribution.param.detach() }")
+#        csp_dist_converged, csp_dist_mean, csp_dist_max = verifyTensorConvergence(dist.csp_distribution.param,
+#                                                                                  previous_csp_dist_params,
+#                                                                                  0.05,0.05)
 
 
 
-        if csp_distribution_converged and i >= minSteps and nonMatching_distribution_converged and csp_dist_converged:
+        if csp_distribution_converged and i >= minSteps and nonMatching_distribution_converged:
             GLOBAL_LOGGER.info("Converged?: True")
             break
         else:
@@ -588,7 +589,8 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
                                                                          variance=variance_scale_fraction_missing * match_std ** 2)  # [matching, nonmatching)
     fraction_possible_matched_rows = min(1,float(distances_squared_normalized.shape[1])/distances_squared_normalized.shape[0])
     max_fraction_missing_rows = 1 - fraction_possible_matched_rows
-    expected_fraction_missing_rows =  max(expected_fraction_missing,1-(1-max_fraction_missing_rows)*(1-expected_fraction_missing))
+    #expected_fraction_missing_rows =  max(expected_fraction_missing,1-(1-max_fraction_missing_rows)*(1-expected_fraction_missing))
+    expected_fraction_missing_rows = expected_fraction_missing
     GLOBAL_LOGGER.info(
         f"fraction_possilbe_matched_rows: {fraction_possible_matched_rows}, expected_fraction_missing_rows: {expected_fraction_missing_rows}, expected_fraction_missing: {expected_fraction_missing}")
     missing_mixture_priors = calculateBetaParametersFromMeanAndVariance(mean=1.0 - expected_fraction_missing_rows,
