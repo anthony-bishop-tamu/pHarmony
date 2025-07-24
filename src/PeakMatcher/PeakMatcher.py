@@ -233,6 +233,7 @@ def optimizeOffSet(reference_peak_positions: torch.Tensor,
                    csp_probabilities: torch.Tensor,
                    learning_rate: float,
                    gradient_convergence: float):
+    PEAK_MATCHER_LOGGER = logging.getLogger(__name__)
     optimizer = torch.optim.LBFGS([offset], line_search_fn='strong_wolfe', lr=0.01)
     maxIterators = 1000
     prevLoss = torch.finfo(torch.float64).max
