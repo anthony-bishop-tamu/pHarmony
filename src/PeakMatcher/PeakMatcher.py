@@ -305,7 +305,7 @@ def maximization(samples: tuple,
             previous_alpha = csp_distribution.alpha.detach().clone()
             previous_scale = csp_distribution.scale.detach().clone()
         optimizer.step()
-        csp_distribution = Frechet(csp_distribution.alpha,csp_distribution.scale)
+
         #with torch.no_grad():
         #    csp_distribution.alpha.clamp_(min=1.0)
         if i % 1 == 0:
@@ -323,7 +323,7 @@ def maximization(samples: tuple,
             continue
         elif prevLoss - loss.item() < 1e-7 and (torch.abs(torch.tensor([csp_distribution.alpha.grad])) < gradient_convergence).all():
             break
-
+        csp_distribution = Frechet(csp_distribution.alpha,csp_distribution.scale)
         prevLoss = loss.item()
        # if i % 100 == 1 and i > 100:
        #     optimizer = torch.optim.Adam(optimization_list, lr=optimizer.param_groups[0]['lr'] * 2)
