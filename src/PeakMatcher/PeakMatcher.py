@@ -103,7 +103,7 @@ def initalizeAllComponents(distances, dims, max_predicted_dm, max_CSP_count):
     csp_distribution = RegFrechet(torch.tensor([1],dtype=torch.float64,requires_grad=True),
                                      torch.tensor([max_predicted_dm],dtype=torch.float64),
                                      torch.tensor([max_CSP_count],dtype=torch.float64))
-    csp_distribution = Frechet(csp_distribution.alpha.detach().clone().requires_grad_(True),csp_distribution.scale.detach().clone().requires_grad_(True))
+    #csp_distribution = Frechet(csp_distribution.alpha.detach().clone().requires_grad_(True),csp_distribution.scale.detach().clone().requires_grad_(True))
 
     non_matching_distribution = UniformDistanceSquared(dim=torch.tensor(dims,dtype=torch.float64),
                                                        Rmax=distances.max(dim=-1)[0])
@@ -323,7 +323,8 @@ def maximization(samples: tuple,
             continue
         elif prevLoss - loss.item() < 1e-7 and (torch.abs(torch.tensor([csp_distribution.alpha.grad])) < gradient_convergence).all():
             break
-        csp_distribution = Frechet(csp_distribution.alpha,csp_distribution.scale)
+        csp_distribution = RegFrechet(csp_distribution.alpha,csp_distribution.max_val,csp_distribution.n)
+        #csp_distribution = Frechet(csp_distribution.alpha,csp_distribution.scale)
         prevLoss = loss.item()
        # if i % 100 == 1 and i > 100:
        #     optimizer = torch.optim.Adam(optimization_list, lr=optimizer.param_groups[0]['lr'] * 2)
@@ -370,7 +371,7 @@ def runEMStep(distances: torch.tensor,
                      missing_mixture_priors,
                      max_predicted_dnm,
                      csp_distribution,
-                     [csp_distribution.alpha,csp_distribution.scale],
+                     [csp_distribution.alpha],
                      non_matching_distribution,
                      learning_rate,
                      gradient_convergence)
@@ -505,7 +506,7 @@ def parseArguments():
     parser.add_argument("--variance_scale_fraction_csp",type=isPositive, help="scaling factor for variance of the prior distribution of csp distribution weight", default=1.0)
     parser.add_argument('--expected_fraction_missing', type=isBetween0And1, help="Estimate of the fraction of peaks that you think will be missing between spectra", default=0.02)
     parser.add_argument("--variance_scale_fraction_missing",type=isPositive, help="scaling factor for variance of the prior distribution of matching distribution weight", default=2.0)
-    parser.add_argument("--expected_max_csp", type=isPositive, help="Estimate of the maximum expected CSP (ppm); Default is in units of proton ppm", default=0.1)
+    parser.add_argument("--expected_max_csp", type=isPositive, help="Estimate of the maximum expected CSP (ppm); Default is in units of proton ppm", default=0.2)
     parser.add_argument("--gradient_convergence",type=isPositive, help="Gradient convergence criterion", default=1E-5)
     parser.add_argument("--output_directory",type=Path,help="Directory path to output the results to", default="./peak_matcher_output")
     parser.add_argument( "--display_distributions", action='store_true', help="Display the distributions plots", )
@@ -749,7 +750,7 @@ def standalone_match_peaks(reference_peak_list: Path,
         name_stem = f"{reference_peak_list.name}_{target_peak_list.name}"
         outputResults(matchingProbabilities.numpy(),
                       posteriorMatchingDistribution.csp_posterior_probabilities.exp(),
-                      distances_squared_normalized,
+                      distances_squared_normalized.detach().numpy(),
                       (reference_peaks, reference_cs_column_names),
                       (target_peaks, target_cs_column_names),
                       output_directory / f"{name_stem}_transferred.csv",

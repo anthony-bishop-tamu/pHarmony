@@ -19,7 +19,7 @@ standalone_match_peaks(reference_list,['w1','w2'], [0.015,0.0015],
                         0.1,2.0,
                         0.1,
                         1E-5,
-                        False,False,0.9, [0.101,1],log_level=20,log_file=True
+                        True,False,0.9, [0.101,1],log_level=20,log_file=True
                          )
 
 #case2
