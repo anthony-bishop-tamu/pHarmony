@@ -80,32 +80,70 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         with record_function("decision_exponentiation"):
             self._base_row_decision_probabilities = self._base_row_decision_likelihoods.exp()
 
-    def conflictMask(self,shape):
-        M = shape[0]
-        C = shape[1] - 1
-        conflictMask = torch.sparse_coo_tensor([],[],(*shape,*shape))
-        conflictMask.scatter_(-1,torch.arange(0,M)[:,None,None,None],True)
-    def topk(self,target: torch.tensor, k: int):
-        original_shape = target.shape
-        target = target.reshape(target.shape[0], -1)
+    def beam_step(self,
+                 beam_decision_mask: torch.tensor,
+                 beam_score: torch.tensor,
+                 likelihood_matrix: torch.tensor,
+                 beam_width: int):
+            beam_indexes = torch.arange(beam_decision_mask.shape[0])
+            beam_score_p_likelihood = beam_score.unsqueeze(-1).unsqueeze(-1) + likelihood_matrix.unsqueeze(0)
+            beam_score_p_likelihood[~beam_decision_mask] = -torch.inf
 
-        val, index = target.topk(k, dim=-1)
-        index = torch.unravel_index(index, original_shape)
-        return val, index
+            top_val,top_index = torch.topk(beam_score_p_likelihood.flatten(), beam_width)
+            top_index = torch.unravel_index(top_index,beam_decision_mask.shape)
 
-    def confilctMatrix(selfs,shape: torch.Size):
-        mat = torch.sparse_coo_tensor([],[],(*shape,*shape),dtype=torch.bool)
+            beam_score[...] = top_val[...]
+            beam_decision_mask[beam_indexes,...] = beam_decision_mask[top_index[0],...]
+            beam_decision_mask[beam_indexes,top_index[1], :] = False
+            valid_col_mask = top_index[2] < beam_decision_mask.shape[-1]-1
+            beam_decision_mask[beam_indexes[valid_col_mask],:,top_index[2][beam_indexes[valid_col_mask]]] = False
+
+    #
+
+    def beam_search_decision(self, row: int, col: int,
+                             decision_mask: torch.tensor,
+                             likelihood_matrix: torch.tensor,
+                             beam_width:int, beam_depth: int):
+        assert decision_mask.dim() == 2
+        assert likelihood_matrix.dim() == 2
+
+        decision_mask=decision_mask.clone()
+        decision_mask[row,:] = False
+        if col < decision_mask.shape[1]-1:
+            decision_mask[:,col] = False
 
 
-    def calculate_adjustment(self,
+        beam_decision_mask = decision_mask.repeat(beam_width,1,1)
+        beam_score = torch.zeros(beam_width,dtype=torch.float64)
+        for d in range(beam_depth):
+            self.beam_step(beam_decision_mask,beam_score,likelihood_matrix,beam_width)
+        return beam_score.logsumexp(dim=-1)
+    #
+    def calculate_adjusted_likelihoods(self,
                              likelihood_matrix: torch.tensor,
                              available_rows: torch.tensor,
                              available_columns: torch.tensor,
-                             k: int = 100,
-                             d: int = 4,
-                             b: int = 100,
+                             k: int,
+                             d: int,
+                             b: int,
                              ):
 
+        assert likelihood_matrix.dim() == 2
+        assert available_rows.dim() == 1
+        assert available_columns.dim() == 1
+        adjustment = torch.zeros((k,),dtype=torch.float32)
+
+        decision_mask = available_rows.unsqueeze(-1) & available_columns.unsqueeze(0)
+        likelihood_matrix = torch.where(decision_mask,likelihood_matrix,-torch.inf)
+        shape = likelihood_matrix.shape
+        top_val, top_index = torch.topk(likelihood_matrix.flatten(), k)
+        top_index_unraveled = torch.unravel_index(top_index,shape)
+        for i in range(k):
+            adjustment[i] = self.beam_search_decision(top_index_unraveled[0][i],top_index_unraveled[1][i],decision_mask,likelihood_matrix,b,d)
+
+        adjustment -= adjustment.logsumexp(dim=-1)
+        indexes =  torch.stack([top_index_unraveled[0],top_index_unraveled[1]],dim=-1)
+        return adjustment + likelihood_matrix.flatten()[top_index], indexes
 
 
 
@@ -118,35 +156,35 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                             decision_counter: int):
 
 
-        row_decision_matrix = self._base_row_decision_probabilities.detach()
+        k=100
+        d=5
+        b=100
+        adjusted_likelihoods = torch.zeros((sample.shape[0],k),dtype=torch.float32)
+        decision_indexes = torch.zeros((sample_indicies.shape[0],k,2),dtype=torch.int32)
+        for i in range(sample_indicies.shape[0]):
+            adjustment, index = self.calculate_adjusted_likelihoods(
+                self._base_row_decision_likelihoods_unnormalized,
+                availableRows[i,:],
+                availableCols[i,:],
+                k,d,b)
+            adjusted_likelihoods[i,:] = adjustment
+            decision_indexes[i,...] = index
 
-        #row_log_evidence[...] = 0
-        alpha = 0
-        row_log_evidence_alpha = row_log_evidence*alpha
+        decision_probabilities = (adjusted_likelihoods - adjusted_likelihoods.logsumexp(dim=-1,keepdim=True)).exp()
+        sampled_decision_indexes = torch.multinomial(decision_probabilities,num_samples=1,replacement=True).type(torch.int32).squeeze(-1)
+        sampled_rows = decision_indexes[sample_indicies,sampled_decision_indexes,0]
+        matched_columns = decision_indexes[sample_indicies, sampled_decision_indexes, 1]
 
-        #prob_tensor = availableRows.type(torch.float64)
-        #row_index_list = torch.nonzero(availableRows.type(torch.float64), as_tuple=True)[1].reshape(sample.shape[0],-1)
-        with record_function("Row_Sampling"):
-            row_log_evidence_alpha[~availableRows] = -torch.inf
-            row_probs = (row_log_evidence_alpha - row_log_evidence_alpha.logsumexp(dim=-1,keepdim=True)).exp()
-            sampled_rows = torch.multinomial(row_probs,num_samples=1,replacement=True).type(torch.int32).squeeze(1)
-            #print(sampled_rows.unique().shape)
-            #sampled_rows = row_index_list[torch.arange(sample.shape[0]),sampled_rows]
-
-        with record_function("Column_Sampling"):
-            probabilities = row_decision_matrix[sampled_rows,:]*availableCols
-            probabilities /= probabilities.sum(dim=-1,keepdim=True)
-            matched_columns = torch.multinomial(probabilities,1,replacement=True).type(torch.int32).squeeze()
 
         no_matched_columns = matched_columns >= self._distances.shape[1]
 
         #availableRows[sample_indicies, sampled_rows] = False
 
         decision_log[sample_indicies,decision_counter,0] = sampled_rows.type(torch.float64)
-        decision_log[sample_indicies, decision_counter, 2] = row_decision_matrix[sampled_rows, matched_columns].type(torch.float64) #+row_probabilities
-        decision_log[sample_indicies,decision_counter, 3] = probabilities[sample_indicies, matched_columns].type(torch.float64)
+        decision_log[sample_indicies, decision_counter, 2] = self._base_row_decision_likelihoods_unnormalized[sampled_rows,matched_columns] #+row_probabilities
+        decision_log[sample_indicies,decision_counter, 3] = decision_probabilities[sample_indicies, sampled_decision_indexes].type(torch.float64)
 
-        sample_weights += 1
+        sample_weights += decision_log[sample_indicies,decision_counter,2] - decision_log[sample_indicies,decision_counter,3]
         assert sample_weights.isfinite().all()
 
 
