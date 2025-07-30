@@ -81,23 +81,49 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
             self._base_row_decision_probabilities = self._base_row_decision_likelihoods.exp()
 
     def beam_step(self,
-                 beam_decision_mask: torch.tensor,
-                 beam_score: torch.tensor,
-                 likelihood_matrix: torch.tensor,
-                 beam_width: int):
-            beam_indexes = torch.arange(beam_decision_mask.shape[0])
+                  beam_remaining_decision_mask: torch.tensor,
+                  beam_decision_mask: torch.tensor,
+                  beam_score: torch.tensor,
+                  likelihood_matrix: torch.tensor,
+                  beam_width: int):
+
+            beam_indexes = torch.arange(beam_remaining_decision_mask.shape[0])
             beam_score_p_likelihood = beam_score.unsqueeze(-1).unsqueeze(-1) + likelihood_matrix.unsqueeze(0)
-            beam_score_p_likelihood[~beam_decision_mask] = -torch.inf
+            beam_score_p_likelihood[~beam_remaining_decision_mask] = -torch.inf
 
             top_val,top_index = torch.topk(beam_score_p_likelihood.flatten(), beam_width)
-            top_index = torch.unravel_index(top_index,beam_decision_mask.shape)
+            top_index = torch.unravel_index(top_index, beam_remaining_decision_mask.shape)
 
-            beam_score[...] = top_val[...]
-            beam_decision_mask[beam_indexes,...] = beam_decision_mask[top_index[0],...]
-            beam_decision_mask[beam_indexes,top_index[1], :] = False
-            valid_col_mask = top_index[2] < beam_decision_mask.shape[-1]-1
-            beam_decision_mask[beam_indexes[valid_col_mask],:,top_index[2][beam_indexes[valid_col_mask]]] = False
+            beam_decision_mask_expanded = torch.zeros((beam_width,
+                                              beam_decision_mask.shape[1]
+                                              ,beam_decision_mask.shape[2]),dtype=torch.bool)
+            beam_indexes_expanded = torch.arange(beam_decision_mask_expanded.shape[0])
 
+            #Handle Decision mask
+            beam_decision_mask_expanded[beam_indexes_expanded,...] = beam_decision_mask[top_index[0],...]
+            beam_decision_mask_expanded[beam_indexes_expanded,top_index[1],top_index[2]] = True
+            beam_decision_mask_expanded, inv, counts = torch.unique(beam_decision_mask_expanded, dim=0,
+                                                                      return_inverse=True,return_counts=True)
+            first_idx = torch.full((beam_decision_mask_expanded.size(0),),beam_width,dtype=torch.int64)
+            first_idx.scatter_reduce_(0,inv,beam_indexes_expanded,reduce='amin')
+            unique_scores = top_val[first_idx]
+
+            #Handle Remaining Decision Mask
+            beam_remaining_decision_mask_expanded = torch.zeros((beam_width,
+                                                                 beam_remaining_decision_mask.shape[1],
+                                                                 beam_remaining_decision_mask.shape[2]), dtype=torch.bool)
+
+
+            beam_remaining_decision_mask_expanded[beam_indexes_expanded,...] = beam_remaining_decision_mask[top_index[0],...]
+            beam_remaining_decision_mask_expanded[beam_indexes_expanded,top_index[1], :] = False
+            valid_col_mask = top_index[2] < beam_remaining_decision_mask.shape[-1] - 1
+            beam_remaining_decision_mask_expanded[beam_indexes_expanded[valid_col_mask],:,top_index[2][beam_indexes_expanded[valid_col_mask]]] = False
+
+            beam_remaining_decision_mask_expanded = beam_remaining_decision_mask_expanded[first_idx,...]
+
+
+
+            return beam_remaining_decision_mask_expanded,beam_decision_mask_expanded,unique_scores
     #
 
     def beam_search_decision(self, row: int, col: int,
@@ -113,10 +139,17 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
             decision_mask[:,col] = False
 
 
-        beam_decision_mask = decision_mask.repeat(beam_width,1,1)
-        beam_score = torch.zeros(beam_width,dtype=torch.float64)
+        beam_remaining_decision_mask = decision_mask.clone().unsqueeze(0)
+        beam_decision_mask = torch.zeros_like(beam_remaining_decision_mask)
+        beam_score = torch.zeros((1,),dtype=torch.float64)
         for d in range(beam_depth):
-            self.beam_step(beam_decision_mask,beam_score,likelihood_matrix,beam_width)
+            if ~beam_remaining_decision_mask.any():
+                break
+            beam_remaining_decision_mask,beam_decision_mask, beam_score = self.beam_step(beam_remaining_decision_mask,
+                                                                     beam_decision_mask,
+                                                                     beam_score,
+                                                                     likelihood_matrix,
+                                                                     beam_width)
         return beam_score.logsumexp(dim=-1)
     #
     def calculate_adjusted_likelihoods(self,
@@ -141,9 +174,10 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         for i in range(k):
             adjustment[i] = self.beam_search_decision(top_index_unraveled[0][i],top_index_unraveled[1][i],decision_mask,likelihood_matrix,b,d)
 
-        adjustment -= adjustment.logsumexp(dim=-1)
         indexes =  torch.stack([top_index_unraveled[0],top_index_unraveled[1]],dim=-1)
-        return adjustment + likelihood_matrix.flatten()[top_index], indexes
+        adjusted_likelihoods = (adjustment + likelihood_matrix.flatten()[top_index])
+        adjusted_likelihoods -= adjusted_likelihoods.logsumexp(dim=-1,keepdim=True)
+        return adjusted_likelihoods, indexes
 
 
 
@@ -156,9 +190,9 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                             decision_counter: int):
 
 
-        k=100
-        d=5
-        b=100
+        k=10
+        d=1
+        b=1
         adjusted_likelihoods = torch.zeros((sample.shape[0],k),dtype=torch.float32)
         decision_indexes = torch.zeros((sample_indicies.shape[0],k,2),dtype=torch.int32)
         for i in range(sample_indicies.shape[0]):
@@ -182,7 +216,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
         decision_log[sample_indicies,decision_counter,0] = sampled_rows.type(torch.float64)
         decision_log[sample_indicies, decision_counter, 2] = self._base_row_decision_likelihoods_unnormalized[sampled_rows,matched_columns] #+row_probabilities
-        decision_log[sample_indicies,decision_counter, 3] = decision_probabilities[sample_indicies, sampled_decision_indexes].type(torch.float64)
+        decision_log[sample_indicies,decision_counter, 3] = decision_probabilities[sample_indicies, sampled_decision_indexes].type(torch.float64).log()
 
         sample_weights += decision_log[sample_indicies,decision_counter,2] - decision_log[sample_indicies,decision_counter,3]
         assert sample_weights.isfinite().all()
