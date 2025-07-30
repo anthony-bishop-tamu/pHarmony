@@ -80,32 +80,6 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         with record_function("decision_exponentiation"):
             self._base_row_decision_probabilities = self._base_row_decision_likelihoods.exp()
 
-    def conflictMask(self,shape):
-        M = shape[0]
-        C = shape[1] - 1
-        conflictMask = torch.sparse_coo_tensor([],[],(*shape,*shape))
-        conflictMask.scatter_(-1,torch.arange(0,M)[:,None,None,None],True)
-    def topk(self,target: torch.tensor, k: int):
-        original_shape = target.shape
-        target = target.reshape(target.shape[0], -1)
-
-        val, index = target.topk(k, dim=-1)
-        index = torch.unravel_index(index, original_shape)
-        return val, index
-
-    def confilctMatrix(selfs,shape: torch.Size):
-        mat = torch.sparse_coo_tensor([],[],(*shape,*shape),dtype=torch.bool)
-
-
-    def calculate_adjustment(self,
-                             likelihood_matrix: torch.tensor,
-                             available_rows: torch.tensor,
-                             available_columns: torch.tensor,
-                             k: int = 100,
-                             d: int = 4,
-                             b: int = 100,
-                             ):
-
 
 
 
