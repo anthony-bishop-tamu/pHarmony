@@ -10,7 +10,7 @@ class SamplingError(Exception):
     pass
 class EnumerationError(Exception):
     pass
-
+from tqdm import tqdm
 def compute_joint_row_probability(likelihoods: torch.tensor,availableCols: torch.tensor = None):
         if likelihoods.shape[0] != 2:
             raise EnumerationError
@@ -39,7 +39,8 @@ class RowClusterSampler:
            self._joint_probability.exp_()
        else:
            #joint probability to large for explicit calculation, gibbs sample
-           gibbs_sample = self.gibbs_sample(100,1000,10,)
+           gibbs_sample,logits = self.gibbs_sample(100,1000,10,)
+           self._gibbs_sample = (gibbs_sample,logits)
            self._train_auto_regression(gibbs_sample)
 
 
@@ -90,8 +91,8 @@ class RowClusterSampler:
             n_samples: int,
             burn_in: int = 100,
             thinning: int = 1,
-            temperatures = None,
-            base_temp_prob: float = 0.1,
+            temperatures = torch.tensor([1.0]),
+            base_temp_prob: float = 0.5,
     ): #-> Tuple[torch.Tensor, torch.Tensor]:
         """Draw samples using Gibbs + Metropolis moves.
 
@@ -123,7 +124,7 @@ class RowClusterSampler:
         # ------------------------------------------------------------------
         if temperatures is None:
             # 1, 3.16, 10, 31.6, 100, 316  (covers ~5 orders of magnitude)
-            temperatures = torch.logspace(0, 5, steps=10, device=device)
+            temperatures = torch.logspace(0, 1, steps=10, device=device)
         assert (temperatures > 0).all(), "Temperatures must be positive."
 
         geom = base_temp_prob * (1.0 - base_temp_prob) ** torch.arange(
@@ -224,7 +225,7 @@ class RowClusterSampler:
         for i,idx in enumerate(temperatures):
             median_delta[i] = torch.median(torch.tensor(deltas_v_temperature[i]))
 
-        return samples#, log_likes
+        return samples, log_likes
 
     def _compute_forward_loss(self,
                               weights: torch.tensor,
@@ -236,29 +237,36 @@ class RowClusterSampler:
         row_indexes = torch.arange(n_rows)
         sample_indexes = torch.arange(n_samples)
         score = torch.zeros((1,),dtype=torch.float)
+        availableCols = torch.ones((n_samples,self._likelihood.shape[1],), dtype=torch.bool)
         for row in range(n_rows):
             if row > 0:
-                local_score = weights[:,gibbs_sample[sample_indexes.unsqueeze(-1),row_indexes[row_mask]]].logsumexp(dim=-1).T + bias
+                local_score = weights[:,gibbs_sample[sample_indexes.unsqueeze(-1),row_indexes[row_mask]],row-1].logsumexp(dim=-1).T + bias
             else:
                 local_score = bias.unsqueeze(0).expand(n_samples,-1)
 
+            local_score = local_score.masked_fill(~availableCols,-torch.inf)
             local_score = local_score - local_score.logsumexp(dim=-1, keepdim=True)
 
             score = score + local_score[sample_indexes,gibbs_sample[sample_indexes,row]].sum(dim=-1)
-
             row_mask[row] = True
+            mutable_col_mask  = gibbs_sample[sample_indexes,row] < n_cols-1
+            availableCols[sample_indexes[mutable_col_mask],gibbs_sample[sample_indexes,row][mutable_col_mask]]= False
         #
-        return -score
+        norm_bias = bias - bias.logsumexp(dim=-1, keepdim=True)
+        return -score + (norm_bias.exp()*norm_bias).sum()
         #score is
 
     def _train_auto_regression(self,
                                gibbs_sample: torch.tensor):
         self._weights = torch.full((self._likelihood.shape[1],
-                                     self._likelihood.shape[1]),0, dtype=torch.float, requires_grad=True)
+                                     self._likelihood.shape[1],
+                                    gibbs_sample.shape[1]-1),0, dtype=torch.float)
+
+        self._weights.diagonal(offset=0,dim1=0,dim2=1).fill_diagonal_(-1000).requires_grad_(True)
         self._bias = torch.zeros((self._likelihood.shape[1]), dtype=torch.float, requires_grad=True)
         self._compute_forward_loss(self._weights, self._bias, gibbs_sample)
 
-        optimizer = torch.optim.Adam([self._weights,self._bias], lr=1E-2)
+        optimizer = torch.optim.Adam([self._weights,self._bias], lr=1E0)
         nsteps = 1000000
         old_loss = torch.inf
         for step in range(nsteps):
@@ -268,6 +276,7 @@ class RowClusterSampler:
             optimizer.step()
             if step % 100 == 0:
                 print(f'Step {step} Loss: {loss.item():.4f}')
+                #print(self._bias)
             if abs(loss.item() < old_loss) < 1E-3:
                 break
             old_loss = loss.item()
@@ -278,16 +287,21 @@ class RowClusterSampler:
         row_indexes = torch.arange(0,self._likelihood.shape[0])
         row_mask = torch.zeros((self._likelihood.shape[0],),dtype=torch.bool)
         probability = 1.0
+        availableCols = torch.ones((self._likelihood.shape[1],),dtype=torch.bool)
         for row in row_indexes:
             if row > 0:
-                logits = self._weights[:,sampled_columns[row_mask]].detach().sum(dim=-1) + self._bias.detach()
+                logits = self._weights[:,sampled_columns[row_mask],row-1].detach().logsumexp(dim=-1) + self._bias.detach()
             else:
-                logits = self._bias.detach()
+                logits = self._bias.detach().clone()
+
+            logits = torch.where(availableCols, logits, -torch.inf)
             logits -= logits.logsumexp(dim=-1, keepdim=True)
             logits.exp_()
             col = torch.multinomial(logits,num_samples=1,replacement=False).squeeze()
             probability *= logits[col]
             sampled_columns[row] = col
+            if col < self._likelihood.shape[1] - 1:
+                availableCols[col] = False
             row_mask[row] = True
             assert(math.isfinite(probability))
         #
@@ -340,6 +354,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         assert not self._loglikelihoodMatrix[:, :,  1].isnan().any()
         assert not self._loglikelihoodMatrix[:, :, 2].isnan().any()
         self._calculateDecisionLogLikelihood()
+        self._row_cluster_samplers = None
     #
 
     def _calculateDecisionLogLikelihood(self):
@@ -366,8 +381,6 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         self._base_row_decision_likelihoods_unnormalized = self._base_row_decision_likelihoods.clone()
 
 
-        self._compute_row_proposals_by_group()
-
     def _compute_row_pair_MI(self, row1_index, row2_index):
         likelihoods = self._base_row_decision_likelihoods_unnormalized[[row1_index,row2_index],:]
 
@@ -391,9 +404,9 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         MI_distance_matrix = 1 - MI_distance_matrix
         return MI_distance_matrix
 
-    def _get_row_groups(self, max_cluster_size=10):
+    def _get_row_groups(self, max_cluster_size=100):
        MI_distance_matrix = self.compute_MI_distance_matrix()
-       for threshold in [ 0.99, 0.90, 0.5, 0.4 ]:
+       for threshold in [ 0.9999,0.999,0.99, 0.5, 0.4,0.2 ]:
             clustering_object = AgglomerativeClustering(n_clusters=None,
                                                    metric='precomputed',
                                                    linkage='single',
@@ -409,14 +422,14 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
     def _compute_row_proposals_by_group(self):
         cluster_ids, unique_clusters,count = self._get_row_groups()
+        gibbs_clusters = (count > 3).sum()
+        print(f"Training n_clusters={len(unique_clusters)}, {gibbs_clusters} require gibbs sampling, {len(unique_clusters) - gibbs_clusters} require direct marginals")
         self._row_cluster_samplers = []
-        for i, unique_cluster in enumerate(unique_clusters):
+        for i, unique_cluster in tqdm(enumerate(unique_clusters),desc='Computing Cluster Marginals'):
             row_mask = cluster_ids == unique_cluster
             row_indexes = row_mask.nonzero(as_tuple=True)[0]
             self._row_cluster_samplers.append((row_indexes,RowClusterSampler(self._base_row_decision_likelihoods_unnormalized[row_mask,:])))
 
-
-        print("Finished computting row proposals")
     #
 
 
@@ -445,17 +458,27 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
             sample[sample_index,cluster_row_indexes] = matched_cols
 
-            if availableCols[sample_index,matched_cols].all() and sample_weights[sample_index].isfinite().all():
+
+            if availableCols[sample_index,matched_cols[~no_matched_cols]].all() and sample_weights[sample_index].isfinite().all():
                 sample_weights[sample_index] += decision_log[sample_index, decision_counter, 3] -   decision_log[sample_index, decision_counter, 2]
             else:
                 sample_weights[sample_index] = -torch.inf
+
+            unique, counts = torch.unique(sample[sample_index, :], return_counts=True, dim=-1)
+            not_neg1_mask = unique > -1
+            assert (counts[not_neg1_mask] == 1).all() or sample_weights[sample_index] == -torch.inf
+
+
             #print(f"Proposal_probability: {proposal_probability}")
-            if (matched_cols != cluster_row_indexes).all():
-                print(f"Alert: poteintial mismatch {coords} != {cluster_row_indexes}, {proposal_probability}")
+            #if (matched_cols != cluster_row_indexes).all():
+            #    print(f"Alert: poteintial mismatch {coords} != {cluster_row_indexes}, {proposal_probability}")
 
             availableRows[sample_index,cluster_row_indexes] = False
             availableCols[sample_index,matched_cols[~no_matched_cols]] = False
             availableClusters[sample_index,cluster_index] = False
+
+        assert sample_weights.isfinite().any()
+
 
 
 
@@ -523,6 +546,8 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         return sample
 
     def sample(self,sample_shape=torch.Size()) -> torch.tensor:
+        if self._row_cluster_samplers is None:
+            self._compute_row_proposals_by_group()
         sample = self._sample(sample_shape)
         return sample
 
