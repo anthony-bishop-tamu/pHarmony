@@ -4,6 +4,7 @@ import torch
 import torch.distributions as torchdist
 import numpy as np
 from torch.profiler import record_function
+import torch.nn.functional as F
 from sklearn.cluster import AgglomerativeClustering
 import math
 class SamplingError(Exception):
@@ -15,13 +16,73 @@ class AutoRegressionModel:
     def __init__(self, shape: tuple, sample: torch.tensor, regularization: float):
         self._device='cpu'
         self._shape = shape
-        self._sample = sample.clone().to(self._device)
+        self._sample = sample.clone().to(self._device).type(torch.int64)
+        self._sample[self._sample == -1] = self._shape[1]-1
         self._alpha= regularization
         self._bias = torch.zeros(self._shape[1],dtype=torch.float,requires_grad=True,device=self._device)
         self._weights = torch.zeros((self._shape[1],self._shape[1],self._shape[0]),dtype=torch.float,device=self._device,requires_grad=True)
         self._train_auto_regression()
 
+    def _compute_forward_loss_vec(self, batch_size: int = 30):
+        R, C = self._shape  # rows, cols
+        B = batch_size
+        dev = self._device
 
+        # --- 1. sample a mini-batch ------------------------------------------------
+        sub = self._sample[torch.randperm(self._sample.size(0), device=dev)[:B]]  # [B, R]
+        #
+        # sub[b, r]  = column chosen by sample b at row r,   −1 means “none yet”
+
+        # --- 2. one-hot encode every choice & build "available columns" mask -------
+        onehot = F.one_hot(sub, num_classes=C)  # [B, R, C], float32
+        chosen_up_to_r = onehot.cumsum(dim=1).clamp_max(1).bool()  # True if column was ever chosen ≤ r
+        avail_mask = ~chosen_up_to_r  # [B, R, C]
+        avail_mask[:,:,-1] = True
+
+        # --- 3. pre-compute α·row_sums for **all** rows in one go ------------------
+        #   row_sums_mat[r, :] = Σ_{c2, r' < r} w[c1, c2, r']
+        row_sums_mat = (
+            self._weights.sum(dim=1)  # -> [C, R]  (sum over 2nd col dim)
+            .cumsum(dim=-1)  # cumulative over rows
+            .transpose(0, 1)  # -> [R, C]
+        )  # shape [R, C]
+        alpha_term = (self._alpha * row_sums_mat)  # [R, C]
+
+        # --- 4. second term: (1-α)·log∑exp w[:, prev_col, r-1] ----------------------
+        # Pad a dummy “previous column” for r = 0 so gather() works.
+        prev_cols = torch.cat(
+            [torch.full((B, 1), 0, dtype=torch.long, device=dev),  # never read for r=0
+             sub[:, :-1].clamp_min(0)], dim=1)  # [B, R]
+
+        # Build an index tensor so we can gather in one shot:
+        #   self._weights has shape [C, C, R]
+        #   we need w[:, prev_cols[b,r], r]  for every b, r
+        idx_r = torch.arange(R, device=dev)  # [R]
+        W = self._weights  # [C, C, R]
+        W_by_r = W.permute(2, 0, 1)  # [R, C_first, C_second]
+
+        # Gather the slice along dim=2 (= second-column dim)
+        gather_idx = prev_cols.unsqueeze(1)  # [B, 1, R]
+        term2 = torch.take_along_dim(
+            W_by_r.unsqueeze(0).expand(B, -1, -1, -1),  # [B, R, C_first, C_second]
+            gather_idx.unsqueeze(2), dim=3  # gather along C_second
+        ).squeeze(3)  # -> [B, R, C_first]
+        term2 = (1.0 - self._alpha) * term2.logsumexp(dim=2)  # log∑exp over C_first
+        term2 = term2  # [B, R]
+
+        # --- 5. assemble logits for every (b, r, c) --------------------------------
+        bias = self._bias  # [C]
+        logits = alpha_term.unsqueeze(0) + term2.unsqueeze(2) + bias  # [B, R, C]
+
+        # mask out columns that are no longer available
+        logits = logits.masked_fill(~avail_mask, -torch.inf)
+
+        # --- 6. compute log-probabilities & accumulated loss -----------------------
+        log_probs = logits - logits.logsumexp(dim=2, keepdim=True)  # [B, R, C]
+        picked_log_p = log_probs.gather(2, sub.unsqueeze(2)).squeeze(2)  # [B, R]
+        score = -picked_log_p.sum(dim=1).mean()  # scalar
+
+        return score
 
     def _compute_forward_loss(self,batch_size=30):
         n_rows = self._shape[0]
@@ -51,23 +112,25 @@ class AutoRegressionModel:
             logits = logits.masked_fill(~availableCols,-torch.inf)
             log_probs = logits - logits.logsumexp(dim=-1, keepdim=True)
             score = score + -log_probs[sample_indexes,cols].sum()
-            mutable_col_mask = cols < n_cols - 1
+            mutable_col_mask = cols < n_cols -1
             availableCols[sample_indexes[mutable_col_mask], cols[mutable_col_mask]] = False
             row_mask[row]=True
         #
-        return score
+        return score/n_samples
         # score is
 
     def _train_auto_regression(self):
 
-        batch_size = 30
-        optimizer = torch.optim.Adam([self._weights, self._bias], lr=1)
+        batch_size = int(self._sample.shape[0]/10)
+        optimizer = torch.optim.Adam([self._weights, self._bias], lr=0.5)
         nsteps = 100
         old_loss = torch.inf
         for step in range(nsteps):
             optimizer.zero_grad()
             loss = self._compute_forward_loss(batch_size=batch_size)
             loss.backward()
+            #torch.nn.utils.clip_grad_value_(self._weights,5.0)
+            #torch.nn.utils.clip_grad_value_(self._bias,5.0)
             optimizer.step()
             if step % 1 == 0:
                 print(f'Step {step} Loss: {loss.item():.4f}')
@@ -81,6 +144,53 @@ class AutoRegressionModel:
             old_loss = loss.item()
 
         print("Done")
+
+    def _getNextInSequence(self,
+                           unnormalized_likelihoods: torch.tensor,
+                           sample: torch.tensor,
+                           sample_indexes: torch.tensor,
+                           availableRows: torch.tensor,
+                           availableCols: torch.tensor,
+                           sample_weights: torch.tensor,
+                           decision_log: torch.tensor,
+                           decision_counter: int):
+
+        row = decision_counter
+        sample_size = sample.shape[0]
+        n_cols = self._shape[1]
+        row_mask = ~availableRows[0] #All samples sample rows in the same order with this method
+
+        row_indexes = torch.arange(self._shape[0],device=self._device)
+        cols = sample[:, row_indexes[row_mask]]
+        row_sums = self._weights[:, :, :row].sum(dim=(-1, -2))
+
+        if row > 0:
+            logits = self._alpha * row_sums.unsqueeze(0).expand(sample_size, n_cols) \
+                     + (1 - self._alpha) * self._weights[:, cols, row - 1].logsumexp(dim=-1).T + self._bias.unsqueeze(0)
+        else:
+            logits = self._bias.unsqueeze(0).expand(sample_size, -1).clone()
+
+        logits = torch.where(availableCols, logits, -torch.inf)
+        logits -= logits.logsumexp(dim=-1, keepdim=True)
+        col = torch.multinomial(logits.exp(), num_samples=1, replacement=False).squeeze().type(torch.int32)
+        assert availableCols[sample_indexes, col].all()
+        assert logits[sample_indexes, col].isfinite().all()
+
+        sample_weights += unnormalized_likelihoods[row,col] - logits[sample_indexes, col]
+        decision_log[sample_indexes, row, 0]= row
+        decision_log[sample_indexes, row, 1] = col.type(torch.float64)
+        decision_log[sample_indexes, row, 2] = unnormalized_likelihoods[row,col]
+        decision_log[sample_indexes, row, 3] = logits[sample_indexes, col].type(torch.float64)
+
+        true_col_mask = col < n_cols - 1
+        col[~true_col_mask] = -1
+        sample[sample_indexes, row] = col
+
+        availableCols[sample_indexes[true_col_mask], col[true_col_mask]] = False
+        availableRows[sample_indexes, row] = False
+
+        row_mask[row] = True
+        #
 
 
     def _draw_auto_regression(self,sample_size):
@@ -166,6 +276,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         assert not self._loglikelihoodMatrix[:, :,  1].isnan().any()
         assert not self._loglikelihoodMatrix[:, :, 2].isnan().any()
         self._calculateDecisionLogLikelihood()
+        self._autoregression = None
     #
 
     def _calculateDecisionLogLikelihood(self):
@@ -192,12 +303,14 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         self._base_row_decision_likelihoods_unnormalized = self._base_row_decision_likelihoods.clone()
         self._base_row_decision_probabilities = (self._base_row_decision_likelihoods_unnormalized - self._base_row_decision_likelihoods_unnormalized.logsumexp(dim=-1,keepdim=True)).exp()
 
-    def __getNextInSequence_Plackett_Lucette(self, sample: torch.tensor, sample_indicies: torch.tensor,
-                            availableRows: torch.tensor,
-                            availableCols: torch.tensor,
-                            sample_weights: torch.tensor,
-                            decision_log: torch.tensor,
-                            decision_counter: int):
+    def __getNextInSequence_Plackett_Lucette(self,
+                                             sample: torch.tensor,
+                                             sample_indicies: torch.tensor,
+                                             availableRows: torch.tensor,
+                                             availableCols: torch.tensor,
+                                             sample_weights: torch.tensor,
+                                             decision_log: torch.tensor,
+                                             decision_counter: int):
 
         row_decision_matrix = self._base_row_decision_probabilities.detach()
 
@@ -235,49 +348,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         availableRows[sample_indicies, sampled_rows] = False
         availableCols[sample_indicies[~no_matched_columns], matched_columns[~no_matched_columns]] = False
 
-    def __getNextInSequence(self, sample: torch.tensor, sample_indicies: torch.tensor,
-                            availableRows: torch.tensor,
-                            availableCols: torch.tensor,
-                            sample_weights: torch.tensor,
-                            decision_log: torch.tensor,
-                            decision_counter: int):
 
-
-        #Choose cluster
-        cluster_index = decision_counter
-        for sample_index in sample_indicies:
-            cluster_row_indexes, sampler = self._row_cluster_samplers[cluster_index]
-            coords, proposal_probability = sampler.draw_sample()
-            matched_cols = torch.tensor(list(coords),dtype=torch.int32)
-
-            decision_log[sample_index,decision_counter,0] = cluster_index
-            decision_log[sample_index, decision_counter, 2] = proposal_probability.log()
-            decision_log[sample_index, decision_counter, 3] = self._base_row_decision_likelihoods_unnormalized[cluster_row_indexes,matched_cols].sum()
-
-            no_matched_cols = matched_cols == availableCols.shape[1]-1
-            matched_cols[no_matched_cols] = -1
-
-            sample[sample_index,cluster_row_indexes] = matched_cols
-
-
-            if availableCols[sample_index,matched_cols[~no_matched_cols]].all() and sample_weights[sample_index].isfinite().all():
-                sample_weights[sample_index] += decision_log[sample_index, decision_counter, 3] -   decision_log[sample_index, decision_counter, 2]
-            else:
-                sample_weights[sample_index] = -torch.inf
-
-            unique, counts = torch.unique(sample[sample_index, :], return_counts=True, dim=-1)
-            not_neg1_mask = unique > -1
-            assert (counts[not_neg1_mask] == 1).all() or sample_weights[sample_index] == -torch.inf
-
-
-            #print(f"Proposal_probability: {proposal_probability}")
-            #if (matched_cols != cluster_row_indexes).all():
-            #    print(f"Alert: poteintial mismatch {coords} != {cluster_row_indexes}, {proposal_probability}")
-
-            availableRows[sample_index,cluster_row_indexes] = False
-            availableCols[sample_index,matched_cols[~no_matched_cols]] = False
-
-        assert sample_weights.isfinite().any()
 
     def _resample(self, sample: torch.Tensor,
                   sample_weights: torch.Tensor,
@@ -337,9 +408,21 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         return sample
 
     def sample(self,sample_shape=torch.Size()) -> torch.tensor:
-        sample = self._sample(self.__getNextInSequence_Plackett_Lucette,sample_shape)
-        reg = AutoRegressionModel(self._base_row_decision_likelihoods_unnormalized.shape,sample,0)
-        sample,weights = reg._draw_auto_regression(100)
+        sample = self._sample(self.__getNextInSequence_Plackett_Lucette,(500,))
+        if self._autoregression is None:
+            self._autoregression = AutoRegressionModel(self._base_row_decision_likelihoods_unnormalized.shape, sample, 0)
+
+        sampler = lambda sample, sample_indicies, availableRows, availableCols, sample_weights,decision_log, decision_counter :  \
+            self._autoregression._getNextInSequence(self._base_row_decision_likelihoods_unnormalized,
+                                                    sample,
+                                                    sample_indicies,
+                                                    availableRows,
+                                                    availableCols,
+                                                    sample_weights,
+                                                    decision_log,
+                                                    decision_counter)
+
+        sample = self._sample(sampler,sample_shape)
         return sample
 
     def log_prob(self, sample):

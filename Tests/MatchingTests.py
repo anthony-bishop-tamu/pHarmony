@@ -11,7 +11,6 @@ data_directory =  importlib_resources.files('Tests.TestData')
 reference_list = data_directory/'case1'/'IL1B_FragmentScreen_Reference_1.list'
 target_list = data_directory/'case1'/'IL1B_FragmentScreen_Fragment_232.list'
 output_directory = data_directory/'case1'/"test_output"
-
 standalone_match_peaks(reference_list,['w1','w2'], [0.015,0.0015],
                         target_list,['w1','w2'], [ 0.015,0.0015],
                         output_directory,
