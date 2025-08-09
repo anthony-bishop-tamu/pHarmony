@@ -13,7 +13,21 @@ class EnumerationError(Exception):
     pass
 from tqdm import tqdm
 
+def sample_gumbel(shape, device=None, dtype=None, generator=None):
+    u = torch.rand(shape, device=device, dtype=dtype, generator=generator)
+    return -torch.log(-torch.log(u))
+def gumbel_max(logits, mask=None, generator=None):
+    # logits: [..., C]
+    if mask is not None:
+        logits = logits.masked_fill(~mask, float("-inf"))
+    g = sample_gumbel(logits.shape, device=logits.device, dtype=logits.dtype, generator=generator)
+    return (logits + g).argmax(dim=-1)  # indices with categorical(softmax(logits)) law
 
+def gumbel_topk(logits, k, mask=None, generator=None):
+    if mask is not None:
+        logits = logits.masked_fill(~mask, float("-inf"))
+    g = sample_gumbel(logits.shape, device=logits.device, dtype=logits.dtype, generator=generator)
+    return (logits + g).topk(k, dim=-1).indices
 
 def validateSample(sample: torch.tensor, availableCols: torch.tensor):
     for i in range(sample.shape[0]):
@@ -93,47 +107,54 @@ class AutoRegressionModel:
 
         return score
 
-    def _compute_forward_loss(self,sample,batch_size=30,unormalized_likelihoods = None):
-        n_rows = self._shape[0]
-        n_cols = self._shape[1]
-        n_samples = batch_size
+    def _compute_forward_loss(self, sample, batch_size=30, unormalized_likelihoods=None):
+        R, C = self._shape
+        B = batch_size
+        dev = self._device
 
-        sub_sample = sample[torch.randperm(sample.shape[0],device=self._device)[:batch_size],:]
+        sub = sample[torch.randperm(sample.size(0), device=dev)[:B]]  # [B, R]
+        avail = torch.ones((B, C), dtype=torch.bool, device=dev)
+        score = torch.zeros((), device=dev)
+        weights = torch.zeros((B,), device=dev)
 
+        # running LSE over all previously chosen columns at current row
+        # (initialize to -inf so logaddexp behaves like LSE)
+        running_lse = torch.full((B, C), float("-inf"), device=dev)
 
+        for r in range(R):
+            # α * sum_{c2, r' < r} w[:, c2, r']
+            row_sums = self._weights[:, :, :r].sum(dim=(-1, -2))  # [C]
+            alpha_term = self._alpha * row_sums.unsqueeze(0)  # [B, C]
 
-        row_mask = torch.zeros((n_rows,), dtype=torch.bool,device=self._device)
-        row_indexes = torch.arange(n_rows,device=self._device)
-        sample_indexes = torch.arange(n_samples,device=self._device)
-        score = torch.zeros((1,), dtype=torch.float,device=self._device)
-        weights = torch.zeros((n_samples,), dtype=torch.float, device=self._device)
-        availableCols = torch.ones((n_samples, self._shape[1]), dtype=torch.bool,device=self._device)
-        for row in range(n_rows):
-            cols = sub_sample[sample_indexes.unsqueeze(-1), row_indexes[row_mask]]
-            row_sums = self._weights[:,:,:row].sum(dim=(-1, -2))
-
-            if row > 0:
-                logits = self._alpha*row_sums.unsqueeze(0).expand(n_samples,n_cols) \
-                     +(1-self._alpha)*self._weights[:,cols,row-1].logsumexp(dim=-1).T + self._bias.unsqueeze(0)
+            if r > 0:
+                # add contribution of the *new* previous column only
+                prev = sub[:, r - 1].clamp_min(0)  # [B]
+                W_slice = self._weights[:, :, r - 1]  # [C, C]
+                contrib = W_slice.index_select(1, prev).T  # [B, C]
+                running_lse = torch.logaddexp(running_lse, contrib)  # [B, C]
+                term2 = (1.0 - self._alpha) * running_lse  # [B, C]
+                logits = alpha_term + term2 + self._bias.unsqueeze(0)  # [B, C]
             else:
-                logits = self._bias.unsqueeze(0).expand(n_samples,-1).clone()
+                logits = self._bias.unsqueeze(0).expand(B, -1)  # [B, C]
 
-            cols = sub_sample[sample_indexes, row]
-            logits = logits.masked_fill(~availableCols,-torch.inf)
+            # mask + NLL
+            logits = logits.masked_fill(~avail, float("-inf"))
             log_probs = logits - logits.logsumexp(dim=-1, keepdim=True)
-            score = score + -log_probs[sample_indexes,cols].sum()
-            if unormalized_likelihoods is not None:
-                local_weight = unormalized_likelihoods[row,cols] - logits[sample_indexes,cols]
-                weights = weights + local_weight
+            cols = sub[:, r].clamp_min(0)  # [B]
+            score = score - log_probs[torch.arange(B, device=dev), cols].sum()
 
-            mutable_col_mask = cols < n_cols -1
-            availableCols[sample_indexes[mutable_col_mask], cols[mutable_col_mask]] = False
-            row_mask[row]=True
-        #
-        norm_weights = (weights - weights.logsumexp(dim=-1, keepdim=True)).exp()
-        ess = 1.0/torch.pow(norm_weights,2).sum()
-        return score/n_samples, ess/n_samples
-        # score is
+            if unormalized_likelihoods is not None:
+                local = unormalized_likelihoods[r, cols] - logits[torch.arange(B, device=dev), cols]
+                weights = weights + local
+
+            # bookkeeping for “without replacement”
+            mutable = cols < (C - 1)
+            avail[torch.arange(B, device=dev)[mutable], cols[mutable]] = False
+
+        norm_w = (weights - weights.logsumexp(dim=-1, keepdim=True)).exp()
+        ess = 1.0 / (norm_w.pow(2).sum())
+        return score / B, ess / B
+
 
     def _train_auto_regression(self,sample,scaling_factor=20.0,unormalized_likelihoods=None):
 
@@ -168,91 +189,112 @@ class AutoRegressionModel:
 
         print("Done")
 
-    def _getNextInSequence(self,
-                           unnormalized_likelihoods: torch.tensor,
-                           sample: torch.tensor,
-                           sample_indexes: torch.tensor,
-                           availableRows: torch.tensor,
-                           availableCols: torch.tensor,
-                           decision_log: torch.tensor,
-                           decision_counter: int):
+    def _sampler_reset_state(self, sample_size: int, n_cols: int, device, dtype):
+        """Initialize the streaming state for a fresh sampling run."""
+        self._gs_state = {
+            "running_lse": torch.full((sample_size, n_cols), float("-inf"), device=device, dtype=dtype),
+            # α * sum_{c2, r'<current} W[c1, c2, r']  will be built from this running vector.
+            "row_acc": torch.zeros(n_cols, device=device, dtype=dtype),
+            "at_row": -1,  # last row that has been incorporated into the state
+        }
 
+    def _sampler_reindex_state(self, indices: torch.Tensor):
+        """Call this *inside* your _resample() right after you reindex sample/weights/etc."""
+        if hasattr(self, "_gs_state") and self._gs_state is not None:
+            st = self._gs_state
+            st["running_lse"] = st["running_lse"][indices]
+
+    @torch.no_grad()
+    def _getNextInSequence(
+            self,
+            unnormalized_likelihoods: torch.Tensor,
+            sample: torch.Tensor,
+            sample_indexes: torch.Tensor,
+            availableRows: torch.Tensor,
+            availableCols: torch.Tensor,
+            decision_log: torch.Tensor,
+            decision_counter: int,
+    ):
+        """
+        Streaming/LSE sampler for one row (same signature as before).
+
+        Keeps:
+          - running_lse[b, c] = log( sum_{r' < current} exp(W[c, prev_col_b[r'], r']) )
+          - row_acc[c]        =     sum_{r' < current, c2} W[c, c2, r']
+        """
         row = decision_counter
-        sample_size = sample.shape[0]
-        n_cols = self._shape[1]
-        row_mask = ~availableRows[0] #All samples sample rows in the same order with this method
+        S = sample.shape[0]
+        C = self._shape[1]
+        dev = sample.device
+        dtype = self._weights.dtype
+        last = C - 1  # sentinel "no-match" column
 
-        row_indexes = torch.arange(self._shape[0],device=self._device)
-        cols = sample[:, row_indexes[row_mask]]
-        row_sums = self._weights[:, :, :row].sum(dim=(-1, -2))
+        # Initialize state at the beginning (or if shapes changed)
+        st = getattr(self, "_gs_state", None)
+        if (
+                st is None
+                or st["running_lse"].shape != (S, C)
+                or st["at_row"] >= row  # new run or restarted
+        ):
+            self._sampler_reset_state(S, C, dev, dtype)
+            st = self._gs_state
 
-        if row > 0:
-            logits = self._alpha * row_sums.unsqueeze(0).expand(sample_size, n_cols) \
-                     + (1 - self._alpha) * self._weights[:, cols, row - 1].logsumexp(dim=-1).T + self._bias.unsqueeze(0)
+        # === Build logits for this row using streaming state (no big temps) =======
+        # α · sum_{c2, r'<row} W[:, c2, r']         -> [C] -> broadcast to [S, C]
+        alpha_term = (self._alpha * st["row_acc"]).unsqueeze(0)  # [1, C] -> [S, C] by broadcast
+
+        # (1-α) · log( Σ_{r'<row} exp(W[:, prev_col[r'], r']) )
+        if row == 0:
+            term2 = 0.0
         else:
-            logits = self._bias.unsqueeze(0).expand(sample_size, -1).clone()
+            term2 = (1.0 - self._alpha) * st["running_lse"]  # [S, C]
 
-        logits = torch.where(availableCols, logits, -torch.inf)
-        logits -= logits.logsumexp(dim=-1, keepdim=True)
-        col = torch.multinomial(logits.exp(), num_samples=1, replacement=False).squeeze().type(torch.int32)
+        logits = alpha_term + term2 + self._bias.unsqueeze(0)  # [S, C]
+        logits = logits.masked_fill(~availableCols, float("-inf"))
+
+        # Normalize only as needed (avoid materializing full softmax)
+        logZ = torch.logsumexp(logits, dim=-1)  # [S]
+        # Sample column with masked logits (exact categorical)
+        col = torch.distributions.Categorical(logits=logits).sample()  # [S], long
+
+        # Sanity (kept from your version)
         assert availableCols[sample_indexes, col].all()
-        assert logits[sample_indexes, col].isfinite().all()
+        chosen_logp = logits[torch.arange(S, device=dev), col] - logZ  # [S]
+        assert torch.isfinite(chosen_logp).all()
 
-        sample_weights = unnormalized_likelihoods[row,col] - logits[sample_indexes, col]
-        decision_log[sample_indexes, row, 0]= row
-        decision_log[sample_indexes, row, 1] = col.type(torch.float64)
-        decision_log[sample_indexes, row, 2] = unnormalized_likelihoods[row,col]
-        decision_log[sample_indexes, row, 3] = logits[sample_indexes, col].type(torch.float64)
+        # === Importance weight for this step ======================================
+        sample_weights = unnormalized_likelihoods[row, col] - chosen_logp  # [S]
 
-        true_col_mask = col < n_cols - 1
-        col[~true_col_mask] = -1
-        sample[sample_indexes, row] = col
+        # === Write decision log (unchanged semantics) =============================
+        decision_log[sample_indexes, row, 0] = float(row)
+        decision_log[sample_indexes, row, 1] = col.to(torch.float64)
+        decision_log[sample_indexes, row, 2] = unnormalized_likelihoods[row, col].to(torch.float64)
+        decision_log[sample_indexes, row, 3] = chosen_logp.to(torch.float64)
 
-        availableCols[sample_indexes[true_col_mask], col[true_col_mask]] = False
-        availableRows[sample_indexes, row] = False
+        # === Commit choice to `sample`, bookkeeping for without-replacement =======
+        true_col_mask = col < last
+        col_out = col.clone()
+        col_out[~true_col_mask] = -1
+        sample[sample_indexes, row] = col_out.to(torch.int32)
 
-        row_mask[row] = True
-        #
+        rows = sample_indexes
+        if true_col_mask.any():
+            availableCols[rows[true_col_mask], col[true_col_mask]] = False
+        availableRows[rows, row] = False  # row is now decided for all samples
+
+        # === Update streaming state for next row (r+1) ============================
+        # 1) Update the global α-term accumulator with the slice for this row
+        st["row_acc"].add_(self._weights.sum(dim=1)[:, row])  # [C]
+
+        # 2) Update per-sample running LSE with current row's contribution
+        #    contrib[b, c] = W[c, col[b], row]
+        W_slice = self._weights[:, :, row]  # [C, C]
+        contrib = W_slice.index_select(1, col.to(torch.long)).T  # [S, C]
+        st["running_lse"] = torch.logaddexp(st["running_lse"], contrib)  # [S, C]
+        st["at_row"] = row
 
         return sample_weights
 
-
-    def _draw_auto_regression(self,sample_size):
-        n_rows = self._shape[0]
-        n_cols = self._shape[1]
-        sample = torch.full((sample_size,n_rows),-2,dtype=torch.int32,device=self._device)
-        row_indexes = torch.arange(0, n_rows,dtype=torch.int32,device=self._device)
-        sample_indexes = torch.arange(sample_size,device=self._device)
-        row_mask = torch.zeros((n_rows,), dtype=torch.bool,device=self._device)
-        availableCols = torch.ones((sample_size,n_cols,), dtype=torch.bool, device=self._device)
-        proposal_weights = torch.zeros((sample_size,), dtype=torch.float,device=self._device)
-        for row in row_indexes:
-            cols = sample[:,row_indexes[row_mask]]
-            row_sums = self._weights[:,:,:row].sum(dim=(-1, -2))
-
-            if row > 0:
-                logits = self._alpha*row_sums.unsqueeze(0).expand(sample_size,n_cols) \
-                     +(1-self._alpha)*self._weights[:,cols,row-1].logsumexp(dim=-1).T + self._bias.unsqueeze(0)
-            else:
-                logits = self._bias.unsqueeze(0).expand(sample_size,-1).clone()
-
-
-            logits = torch.where(availableCols, logits, -torch.inf)
-            logits -= logits.logsumexp(dim=-1, keepdim=True)
-            col = torch.multinomial(logits.exp(), num_samples=1, replacement=False).squeeze().type(torch.int32)
-            assert availableCols[sample_indexes, col].all()
-            proposal_weights += logits[sample_indexes,col]
-
-            true_col_mask = col < n_cols - 1
-            col[~true_col_mask] = -1
-            sample[sample_indexes,row] = col
-
-            availableCols[sample_indexes[true_col_mask],col[true_col_mask]] = False
-
-            row_mask[row] = True
-            assert (proposal_weights.isfinite()).all()
-        #
-        return sample, proposal_weights
 
 
 class CSPDetectionDistribution(torch.distributions.Distribution):
@@ -395,28 +437,26 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
             availableRows[...,:] =availableRows[indices,:]
             availableCols[...,:] =availableCols[indices,:]
             decision_log[...,...] =decision_log[indices,...]
+            if self._autoregression is not None:
+                self._autoregression._sampler_reindex_state(indices)
             return ess/nsamples < 0.25
         else:
             return False
     #
 
 
-    def calculatePairwiseMarginalProbabilityDistributions_2D(self,
-                                                     likelihood_matrix: torch.tensor,
-                                                     row_indexes: torch.tensor):
+    def calculatePairwiseMarginalLogits(self,
+                                        likelihood_matrix: torch.tensor,
+                                        row_indexes: torch.tensor):
         n_cols = likelihood_matrix.shape[-1]
-        marginal_probabilities = likelihood_matrix[row_indexes,:].unsqueeze(1).unsqueeze(-1) + likelihood_matrix[row_indexes,:].unsqueeze(0).unsqueeze(-2)
+        marginal_logits = likelihood_matrix[row_indexes,:].unsqueeze(1).unsqueeze(-1) + likelihood_matrix[row_indexes,:].unsqueeze(0).unsqueeze(-2)
         #available_mask = availableCols.unsqueeze(-1) & availableCols.unsqueeze(1)
         #d = available_mask.diagonal(offset=0,dim1=1,dim2=2)
         #d.zero_()
         #available_mask[:,n_cols-1,n_cols-1] = 1
 
         #marginal_probabilities.masked_fill_(~available_mask, -torch.inf)
-
-        marginal_probabilities -= marginal_probabilities.logsumexp(dim=(-1,-2), keepdim=True)
-        marginal_probabilities.exp_()
-        return marginal_probabilities
-
+        return (marginal_logits-marginal_logits.logsumexp(dim=(-1,2), keepdim=True)).exp()
 
     def sampleRandomVariablePairFromMarginal(self,marginals: torch.tensor,
                                              availableCols: torch.tensor,
@@ -439,7 +479,61 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
         return col1, col2
 
+    ''''@torch.no_grad()
+    def sampleRandomVariablePairFromMarginal(
+            self,
+            availableCols: torch.Tensor,  # [S, C] bool
+            cluster_row_indexes: torch.Tensor,  # [K] sorted
+            x_row_index: torch.Tensor,  # [S]
+            y_row_index: torch.Tensor,  # [S]
+            *, generator=None, use_categorical: bool = False
+    ):
+        """
+        Exact sampling from logits Lx[c1] + Ly[c2] with:
+          • per-sample availability mask (availableCols)
+          • diagonal forbidden except (C-1, C-1) allowed
 
+        Complexity: O(S*C) time/memory.
+        """
+        S, C = availableCols.shape
+        dev = availableCols.device
+        last = C - 1
+
+        # Map global row ids -> cluster-local indices
+        mapped_x = torch.searchsorted(cluster_row_indexes, x_row_index)
+        mapped_y = torch.searchsorted(cluster_row_indexes, y_row_index)
+
+        # Pull 1-D row logits (shape [S, C]) instead of forming [S, C, C]
+        row_logits = self._base_row_decision_likelihoods_unnormalized  # [R, C]
+        Lx = row_logits.index_select(0, mapped_x)  # [S, C]
+        Ly = row_logits.index_select(0, mapped_y)  # [S, C]
+
+        # Mask availability for the first pick
+        Lx = Lx.masked_fill(~availableCols, float("-inf"))
+
+        # Sample c1 ~ softmax(Lx) with availability
+        if use_categorical:
+            c1 = torch.distributions.Categorical(logits=Lx).sample(generator=generator)
+        else:
+            c1 = gumbel_max(Lx, mask=availableCols, generator=generator)  # [S]
+
+        # For the second pick, forbid c2 == c1 (except when c1 == last)
+        mask2 = availableCols.clone()
+        rows = torch.arange(S, device=dev)
+        forbid = (c1 != last)
+        mask2[rows[forbid], c1[forbid]] = False
+
+        Ly = Ly.masked_fill(~mask2, float("-inf"))
+
+        # Sample c2 ~ softmax(Ly | c2 != c1) with availability
+        if use_categorical:
+            c2 = torch.distributions.Categorical(logits=Ly).sample(generator=generator)
+        else:
+            c2 = gumbel_max(Ly, mask=mask2, generator=generator)
+
+        return c1.to(torch.int32), c2.to(torch.int32)'''
+
+    @torch.no_grad()
     def compute_distance_matrix(self, sample: torch.Tensor, n_cols: int, block: int = 64) -> torch.Tensor:
         S, R = sample.shape
         C = n_cols
@@ -501,7 +595,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
             cluster_row_index_order = torch.multinomial(cluster_masks[cluster].type(torch.float32).unsqueeze(0).expand(n_samples*n_sweeps,-1),replacement=False,num_samples=cluster_masks[cluster].sum()).type(torch.int32).squeeze()
             cluster_row_index_order = cluster_row_index_order.reshape(n_sweeps,n_samples,-1)
             cluster_row_indexes = torch.nonzero(cluster_masks[cluster]).squeeze()
-            marginals = self.calculatePairwiseMarginalProbabilityDistributions_2D(self._base_row_decision_likelihoods_unnormalized,cluster_row_indexes)
+            marginals = self.calculatePairwiseMarginalLogits(self._base_row_decision_likelihoods_unnormalized, cluster_row_indexes)
 
             for sweep in tqdm(range(n_sweeps),desc="Gibbs sweeps"):
                 rand_order = cluster_row_index_order[sweep,...]
@@ -520,16 +614,15 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
 
                         #choose new state
-                        col1,col2 = self.sampleRandomVariablePairFromMarginal(marginals,
-                                                                              availableCols,
+                        col1,col2 = self.sampleRandomVariablePairFromMarginal(marginals,availableCols,
                                                                               cluster_row_indexes,
                                                                               row_1,
                                                                               row_2)
 
 
-                        assert ((col1 != col2) | (col1 == n_cols-1)).all()
-                        assert (availableCols[sample_indicies,col1[sample_indicies]]).all()
-                        assert (availableCols[sample_indicies,col2[sample_indicies]]).all()
+                        #assert ((col1 != col2) | (col1 == n_cols-1)).all()
+                        #assert (availableCols[sample_indicies,col1[sample_indicies]]).all()
+                        #assert (availableCols[sample_indicies,col2[sample_indicies]]).all()
                         col1[col1 == (n_cols-1)] = -1
                         col2[col2 == (n_cols-1)] = -1
 
@@ -549,15 +642,8 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                         #old_available_cols_2 = availableCols.clone()
                         sample[sample_indicies, row_1] = -2
 
-                        #calculate the probability
-                        marginal_probability_distributions_1D = self._base_row_decision_likelihoods_unnormalized[row_1, :].clone()
-                        marginal_probability_distributions_1D.masked_fill_(~availableCols,-torch.inf)
-                        marginal_probability_distributions_1D -= marginal_probability_distributions_1D.logsumexp(dim=-1, keepdim=True)
-                        marginal_probability_distributions_1D.exp_()
-
-                        #grab the new column
-                        col1 = torch.multinomial(marginal_probability_distributions_1D, num_samples=1, replacement=False).type(
-                            torch.int32).squeeze()
+                        #sample
+                        col1 = gumbel_max(self._base_row_decision_likelihoods_unnormalized[row_1,:], mask=availableCols)
                         col1[col1 == (n_cols - 1)] = -1
 
                         #implement the selection
