@@ -1,7 +1,5 @@
 from src.PeakMatcher.PeakMatcher import standalone_match_peaks
-import src.PeakMatcher
 import importlib_resources
-import logging
 
 
 

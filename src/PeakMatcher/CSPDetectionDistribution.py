@@ -13,6 +13,8 @@ class EnumerationError(Exception):
     pass
 from tqdm import tqdm
 
+
+
 def validateSample(sample: torch.tensor, availableCols: torch.tensor):
     for i in range(sample.shape[0]):
         unique, counts = torch.unique(sample[i], return_counts=True)
@@ -145,7 +147,7 @@ class AutoRegressionModel:
         nsteps = 100
         old_loss = torch.inf
         for step in range(nsteps):
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
             score, ess = self._compute_forward_loss(sample,batch_size=batch_size,unormalized_likelihoods=unormalized_likelihoods)
             loss = score + scaling_factor*(1-ess)
             loss.backward()
@@ -162,7 +164,7 @@ class AutoRegressionModel:
                 if batch_size > sample.shape[0]:
                     batch_size = sample.shape[0]
             old_loss = loss.item()
-            scheduler.step(loss)
+            scheduler.step(loss.detach())
 
         print("Done")
 
@@ -252,12 +254,7 @@ class AutoRegressionModel:
         #
         return sample, proposal_weights
 
-def logisticDistribution(loc,scale):
-    base_distribution = torchdist.Uniform(0, 1)
-    transforms = [torchdist.transforms.SigmoidTransform().inv, torchdist.transforms.AffineTransform(loc=loc, scale=scale)]
-    logistic = torchdist.transformed_distribution.TransformedDistribution(base_distribution, transforms)
-    return logistic
-#
+
 class CSPDetectionDistribution(torch.distributions.Distribution):
     arg_constraints = {}
     def __init__(self, distances: torch.tensor,
@@ -404,100 +401,170 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
     #
 
 
-    def calculateMarginalProbabilityDistributions_2D(self,
-                                                     availableCols: torch.tensor,
+    def calculatePairwiseMarginalProbabilityDistributions_2D(self,
                                                      likelihood_matrix: torch.tensor,
-                                                     marginal_probabilities: torch.tensor):
-        n_cols = availableCols.shape[1]
-        marginal_probabilities[...] = likelihood_matrix[:,0,:].unsqueeze(-1) + likelihood_matrix[:,1,:].unsqueeze(1)
+                                                     row_indexes: torch.tensor):
+        n_cols = likelihood_matrix.shape[-1]
+        marginal_probabilities = likelihood_matrix[row_indexes,:].unsqueeze(1).unsqueeze(-1) + likelihood_matrix[row_indexes,:].unsqueeze(0).unsqueeze(-2)
+        #available_mask = availableCols.unsqueeze(-1) & availableCols.unsqueeze(1)
+        #d = available_mask.diagonal(offset=0,dim1=1,dim2=2)
+        #d.zero_()
+        #available_mask[:,n_cols-1,n_cols-1] = 1
+
+        #marginal_probabilities.masked_fill_(~available_mask, -torch.inf)
+
+        marginal_probabilities -= marginal_probabilities.logsumexp(dim=(-1,-2), keepdim=True)
+        marginal_probabilities.exp_()
+        return marginal_probabilities
+
+
+    def sampleRandomVariablePairFromMarginal(self,marginals: torch.tensor,
+                                             availableCols: torch.tensor,
+                                             cluster_row_indexes: torch.tensor,
+                                             x_row_index: torch.tensor,
+                                             y_row_index: torch.tensor):
+
+        n_cols = availableCols.shape[-1]
+        mapped_x = torch.searchsorted(cluster_row_indexes, x_row_index)
+        mapped_y = torch.searchsorted(cluster_row_indexes, y_row_index)
+
         available_mask = availableCols.unsqueeze(-1) & availableCols.unsqueeze(1)
         d = available_mask.diagonal(offset=0,dim1=1,dim2=2)
         d.zero_()
         available_mask[:,n_cols-1,n_cols-1] = 1
 
-        marginal_probabilities.masked_fill_(~available_mask, -torch.inf)
+        marginals = marginals[mapped_x,mapped_y].reshape(available_mask.shape[0],-1)
+        sampled_indexes = torch.multinomial(marginals*available_mask.reshape(available_mask.shape[0],-1), num_samples=1, replacement=True).type(torch.int32).squeeze()
+        col1, col2 = torch.unravel_index(sampled_indexes, available_mask.shape[1:])
 
-        marginal_probabilities -= marginal_probabilities.logsumexp(dim=(-1,-2), keepdim=True)
-        marginal_probabilities.exp_()
+        return col1, col2
 
 
+    def compute_distance_matrix(self, sample: torch.Tensor, n_cols: int, block: int = 64) -> torch.Tensor:
+        S, R = sample.shape
+        C = n_cols
+        device = sample.device
+        sample[sample == -1] = n_cols-1
+        X = F.one_hot(sample.to(torch.long), num_classes=C).to(torch.float32)  # (S,R,C)
+        row_p = X.sum(0) / float(S)  # (R,C)
+        log_row_p = torch.zeros_like(row_p)
+        m = row_p > 0
+        log_row_p[m] = row_p[m].log()
+
+        dist = torch.empty((R, R), dtype=torch.float32, device=device)
+        for i0 in range(0, R, block):
+            i1 = min(R, i0 + block)
+            A = X[:, i0:i1, :]  # (S, Bi, C)
+            log_pi = log_row_p[i0:i1, :][:, None, :, None]  # (Bi,1,C,1)
+            for j0 in range(0, R, block):
+                j1 = min(R, j0 + block)
+                B = X[:, j0:j1, :]  # (S, Bj, C)
+                log_pj = log_row_p[j0:j1, :][None, :, None, :]  # (1,Bj,1,C)
+
+                p = torch.einsum('sac,sbd->abcd', A, B) / float(S)  # (Bi,Bj,C,C)
+                log_p = torch.zeros_like(p);
+                mp = p > 0;
+                log_p[mp] = p[mp].log()
+
+                mi = (p * (log_p - (log_pi + log_pj))).sum(dim=(2, 3))
+                H = -(p * log_p).sum(dim=(2, 3))
+                dist[i0:i1, j0:j1] = torch.where(H == 0, torch.ones_like(H), 1.0 - mi / H)
+
+        dist = 0.5 * (dist + dist.T)
+        dist.fill_diagonal_(0.0)
+        sample[sample == n_cols-1] = -1
+        return dist
+    def generateRowClusters(self,sample: torch.Tensor, n_cols: int):
+        distance_matrix = self.compute_distance_matrix(sample,n_cols,100)
+        cluster_indexes = torch.from_numpy(AgglomerativeClustering(n_clusters=None,metric='precomputed',linkage='single',distance_threshold=0.90).fit_predict(distance_matrix))
+        unique_clusters,counts = torch.unique(cluster_indexes,return_counts=True)
+        cluster_masks = []
+        for i,idx in enumerate(unique_clusters):
+            if counts[i] > 1:
+                cluster_masks.append(cluster_indexes == idx)
+
+        return cluster_masks
+    #
 
     def gibbs_sample(self, sample: torch.Tensor,
                    sample_indicies: torch.tensor,
-                   availableRows: torch.tensor,
                    availableCols: torch.tensor,
                    n_sweeps: int):
 
         n_samples = sample.shape[0]
         n_cols = availableCols.shape[1]
-        marginal_probability_distributions_2D = torch.zeros(
-            (n_samples, availableCols.shape[1], availableCols.shape[1]))
-        marginal_probability_distributions_1D =  torch.zeros((n_samples, availableCols.shape[1]))
-        for sweep in tqdm(range(n_sweeps),desc="Gibbs sweeps"):
-            # Get random order, sequential rows are paired
-            rand_order = torch.multinomial(torch.ones_like(availableRows, dtype=torch.float32),
-                                           num_samples=availableRows.shape[1],
-                                           replacement=False,
-                                           )
-            for i in range(rand_order.shape[1]):
-                row_1 = rand_order[:,i]
-                if i+1 < rand_order.shape[1]: #pairs
-                    row_2 = rand_order[:,i+1]
-                    pairs = torch.stack((row_1, row_2), dim=-1)
+
+        cluster_masks = self.generateRowClusters(sample,n_cols)
+
+        for cluster in tqdm(range(len(cluster_masks)),desc='Gibbs sample over clusters'):
+
+            cluster_row_index_order = torch.multinomial(cluster_masks[cluster].type(torch.float32).unsqueeze(0).expand(n_samples*n_sweeps,-1),replacement=False,num_samples=cluster_masks[cluster].sum()).type(torch.int32).squeeze()
+            cluster_row_index_order = cluster_row_index_order.reshape(n_sweeps,n_samples,-1)
+            cluster_row_indexes = torch.nonzero(cluster_masks[cluster]).squeeze()
+            marginals = self.calculatePairwiseMarginalProbabilityDistributions_2D(self._base_row_decision_likelihoods_unnormalized,cluster_row_indexes)
+
+            for sweep in tqdm(range(n_sweeps),desc="Gibbs sweeps"):
+                rand_order = cluster_row_index_order[sweep,...]
+                for i in range(rand_order.shape[1]):
+                    row_1 = rand_order[:,i]
+                    if i+1 < rand_order.shape[1]: #pairs
+                        row_2 = rand_order[:,i+1]
 
 
-                    availableCols[sample_indicies, sample[sample_indicies,row_1]] = True
-                    availableCols[sample_indicies, sample[sample_indicies,row_2]] = True
+                        availableCols[sample_indicies, sample[sample_indicies,row_1]] = True
+                        availableCols[sample_indicies, sample[sample_indicies,row_2]] = True
 
-                    sample[sample_indicies, row_1] = -2
-                    sample[sample_indicies, row_2] = -2
-
-                    self.calculateMarginalProbabilityDistributions_2D(availableCols,
-                                                                      self._base_row_decision_likelihoods_unnormalized[pairs,:],
-                                                                      marginal_probability_distributions_2D)
-                    #Choose new state
-                    probs_for_multinomial = marginal_probability_distributions_2D.reshape(n_samples,-1)
-                    indexes = torch.multinomial(probs_for_multinomial,num_samples=1,replacement=False).type(torch.int32).squeeze()
-
-                    col1, col2 = torch.unravel_index(indexes, marginal_probability_distributions_2D.shape[1:])
-                    assert ((col1 != col2) | (col1 == n_cols-1)).all()
-                    assert (availableCols[sample_indicies,col1[sample_indicies]]).all()
-                    assert (availableCols[sample_indicies,col2[sample_indicies]]).all()
-                    col1[col1 == (n_cols-1)] = -1
-                    col2[col2 == (n_cols-1)] = -1
-
-                    sample[sample_indicies, row_1] = col1.type(torch.int32)
-                    sample[sample_indicies, row_2] = col2.type(torch.int32)
+                        sample[sample_indicies, row_1] = -2
+                        sample[sample_indicies, row_2] = -2
 
 
-                    availableCols[sample_indicies, col1] = False
-                    availableCols[sample_indicies, col2] = False
-                    availableCols[:, -1] = True
-                    #validateSample(sample,availableCols)
-                else: #single
-                    #make available the column
-                    old_cols = sample[sample_indicies,row_1].clone()
-                    #old_available_cols_1 = availableCols.clone()
-                    availableCols[sample_indicies,old_cols ] = True
-                    #old_available_cols_2 = availableCols.clone()
-                    sample[sample_indicies, row_1] = -2
 
-                    #calculate the probability
-                    marginal_probability_distributions_1D[...] = self._base_row_decision_likelihoods_unnormalized[row_1, :]
-                    marginal_probability_distributions_1D.masked_fill_(~availableCols,-torch.inf)
-                    marginal_probability_distributions_1D -= marginal_probability_distributions_1D.logsumexp(dim=-1, keepdim=True)
-                    marginal_probability_distributions_1D.exp_()
+                        #choose new state
+                        col1,col2 = self.sampleRandomVariablePairFromMarginal(marginals,
+                                                                              availableCols,
+                                                                              cluster_row_indexes,
+                                                                              row_1,
+                                                                              row_2)
 
-                    #grab the new column
-                    col1 = torch.multinomial(marginal_probability_distributions_1D, num_samples=1, replacement=False).type(
-                        torch.int32).squeeze()
-                    col1[col1 == (n_cols - 1)] = -1
 
-                    #implement the selection
-                    sample[sample_indicies, row_1] = col1.type(torch.int32)
-                    availableCols[sample_indicies, col1] = False
-                    availableCols[:, -1] = True
-                    #validateSample(sample, availableCols)
+                        assert ((col1 != col2) | (col1 == n_cols-1)).all()
+                        assert (availableCols[sample_indicies,col1[sample_indicies]]).all()
+                        assert (availableCols[sample_indicies,col2[sample_indicies]]).all()
+                        col1[col1 == (n_cols-1)] = -1
+                        col2[col2 == (n_cols-1)] = -1
+
+                        sample[sample_indicies, row_1] = col1.type(torch.int32)
+                        sample[sample_indicies, row_2] = col2.type(torch.int32)
+
+
+                        availableCols[sample_indicies, col1] = False
+                        availableCols[sample_indicies, col2] = False
+                        availableCols[:, -1] = True
+                        #validateSample(sample,availableCols)
+                    else: #single
+                        #make available the column
+                        old_cols = sample[sample_indicies,row_1].clone()
+                        #old_available_cols_1 = availableCols.clone()
+                        availableCols[sample_indicies,old_cols ] = True
+                        #old_available_cols_2 = availableCols.clone()
+                        sample[sample_indicies, row_1] = -2
+
+                        #calculate the probability
+                        marginal_probability_distributions_1D = self._base_row_decision_likelihoods_unnormalized[row_1, :].clone()
+                        marginal_probability_distributions_1D.masked_fill_(~availableCols,-torch.inf)
+                        marginal_probability_distributions_1D -= marginal_probability_distributions_1D.logsumexp(dim=-1, keepdim=True)
+                        marginal_probability_distributions_1D.exp_()
+
+                        #grab the new column
+                        col1 = torch.multinomial(marginal_probability_distributions_1D, num_samples=1, replacement=False).type(
+                            torch.int32).squeeze()
+                        col1[col1 == (n_cols - 1)] = -1
+
+                        #implement the selection
+                        sample[sample_indicies, row_1] = col1.type(torch.int32)
+                        availableCols[sample_indicies, col1] = False
+                        availableCols[:, -1] = True
+                       # validateSample(sample, availableCols)
 
 
 
@@ -553,7 +620,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
 
             for i in range(5):
-                self.gibbs_sample(sample, sample_indexes, availableRows, availableCols, n_sweeps=10)
+                self.gibbs_sample(sample, sample_indexes, availableCols, n_sweeps=100)
                 self._autoregression._train_auto_regression(sample,
                                                             unormalized_likelihoods=self._base_row_decision_likelihoods_unnormalized)
                 sample, sample_indexes, availableRows, availableCols, decision_log, gibbs_sample = self._sample(sampler,
