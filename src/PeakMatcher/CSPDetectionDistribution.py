@@ -420,9 +420,12 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         normalized_weights = (sample_weights - sample_weights.logsumexp(dim=-1, keepdim=True)).exp()
         ess = 1.0/torch.pow(normalized_weights,2).sum()
         nsamples = np.prod(sample.shape[0:-1])
-        print(f"ESS ratio:, {ess/sample_weights.shape[0]:0.3f}")
+        ess_ratio = ess/sample_weights.shape[0]
+        print(f"ESS ratio:, {ess_ratio:0.3f}")
         assert ess.isfinite().all()
-        if ess < nsamples*0.5 or force_resample:
+        if ess_ratio < self._lowest_ess_ratio:
+            self._lowest_ess_ratio = ess_ratio.item()
+        if ess_ratio < 0.5 or force_resample:
             # Step 1: Create systematic positions
             positions = (torch.arange(nsamples, dtype=sample_weights.dtype, device=sample_weights.device) +
                          torch.rand(1,dtype=sample_weights.dtype,device=sample_weights.device)) / nsamples
@@ -458,35 +461,14 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         #marginal_probabilities.masked_fill_(~available_mask, -torch.inf)
         return (marginal_logits-marginal_logits.logsumexp(dim=(-1,2), keepdim=True)).exp()
 
-    def sampleRandomVariablePairFromMarginal(self,marginals: torch.tensor,
-                                             availableCols: torch.tensor,
-                                             cluster_row_indexes: torch.tensor,
-                                             x_row_index: torch.tensor,
-                                             y_row_index: torch.tensor):
-
-        n_cols = availableCols.shape[-1]
-        mapped_x = torch.searchsorted(cluster_row_indexes, x_row_index)
-        mapped_y = torch.searchsorted(cluster_row_indexes, y_row_index)
-
-        available_mask = availableCols.unsqueeze(-1) & availableCols.unsqueeze(1)
-        d = available_mask.diagonal(offset=0,dim1=1,dim2=2)
-        d.zero_()
-        available_mask[:,n_cols-1,n_cols-1] = 1
-
-        marginals = marginals[mapped_x,mapped_y].reshape(available_mask.shape[0],-1)
-        sampled_indexes = torch.multinomial(marginals*available_mask.reshape(available_mask.shape[0],-1), num_samples=1, replacement=True).type(torch.int32).squeeze()
-        col1, col2 = torch.unravel_index(sampled_indexes, available_mask.shape[1:])
-
-        return col1, col2
-
-    ''''@torch.no_grad()
+    @torch.no_grad()
     def sampleRandomVariablePairFromMarginal(
             self,
             availableCols: torch.Tensor,  # [S, C] bool
             cluster_row_indexes: torch.Tensor,  # [K] sorted
             x_row_index: torch.Tensor,  # [S]
             y_row_index: torch.Tensor,  # [S]
-            *, generator=None, use_categorical: bool = False
+            *, generator=None
     ):
         """
         Exact sampling from logits Lx[c1] + Ly[c2] with:
@@ -499,23 +481,16 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         dev = availableCols.device
         last = C - 1
 
-        # Map global row ids -> cluster-local indices
-        mapped_x = torch.searchsorted(cluster_row_indexes, x_row_index)
-        mapped_y = torch.searchsorted(cluster_row_indexes, y_row_index)
 
         # Pull 1-D row logits (shape [S, C]) instead of forming [S, C, C]
         row_logits = self._base_row_decision_likelihoods_unnormalized  # [R, C]
-        Lx = row_logits.index_select(0, mapped_x)  # [S, C]
-        Ly = row_logits.index_select(0, mapped_y)  # [S, C]
+        Lx = row_logits.index_select(0, x_row_index)  # [S, C]
+        Ly = row_logits.index_select(0, y_row_index)  # [S, C]
 
         # Mask availability for the first pick
         Lx = Lx.masked_fill(~availableCols, float("-inf"))
 
-        # Sample c1 ~ softmax(Lx) with availability
-        if use_categorical:
-            c1 = torch.distributions.Categorical(logits=Lx).sample(generator=generator)
-        else:
-            c1 = gumbel_max(Lx, mask=availableCols, generator=generator)  # [S]
+        c1 = gumbel_max(Lx, mask=availableCols, generator=generator)  # [S]
 
         # For the second pick, forbid c2 == c1 (except when c1 == last)
         mask2 = availableCols.clone()
@@ -526,58 +501,37 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         Ly = Ly.masked_fill(~mask2, float("-inf"))
 
         # Sample c2 ~ softmax(Ly | c2 != c1) with availability
-        if use_categorical:
-            c2 = torch.distributions.Categorical(logits=Ly).sample(generator=generator)
-        else:
-            c2 = gumbel_max(Ly, mask=mask2, generator=generator)
+        c2 = gumbel_max(Ly, mask=mask2, generator=generator)
 
-        return c1.to(torch.int32), c2.to(torch.int32)'''
+        return c1.to(torch.int32), c2.to(torch.int32)
 
     @torch.no_grad()
-    def compute_distance_matrix(self, sample: torch.Tensor, n_cols: int, block: int = 64) -> torch.Tensor:
-        S, R = sample.shape
-        C = n_cols
-        device = sample.device
-        sample[sample == -1] = n_cols-1
-        X = F.one_hot(sample.to(torch.long), num_classes=C).to(torch.float32)  # (S,R,C)
-        row_p = X.sum(0) / float(S)  # (R,C)
-        log_row_p = torch.zeros_like(row_p)
-        m = row_p > 0
-        log_row_p[m] = row_p[m].log()
-
-        dist = torch.empty((R, R), dtype=torch.float32, device=device)
-        for i0 in range(0, R, block):
-            i1 = min(R, i0 + block)
-            A = X[:, i0:i1, :]  # (S, Bi, C)
-            log_pi = log_row_p[i0:i1, :][:, None, :, None]  # (Bi,1,C,1)
-            for j0 in range(0, R, block):
-                j1 = min(R, j0 + block)
-                B = X[:, j0:j1, :]  # (S, Bj, C)
-                log_pj = log_row_p[j0:j1, :][None, :, None, :]  # (1,Bj,1,C)
-
-                p = torch.einsum('sac,sbd->abcd', A, B) / float(S)  # (Bi,Bj,C,C)
-                log_p = torch.zeros_like(p);
-                mp = p > 0;
-                log_p[mp] = p[mp].log()
-
-                mi = (p * (log_p - (log_pi + log_pj))).sum(dim=(2, 3))
-                H = -(p * log_p).sum(dim=(2, 3))
-                dist[i0:i1, j0:j1] = torch.where(H == 0, torch.ones_like(H), 1.0 - mi / H)
-
-        dist = 0.5 * (dist + dist.T)
-        dist.fill_diagonal_(0.0)
-        sample[sample == n_cols-1] = -1
-        return dist
-    def generateRowClusters(self,sample: torch.Tensor, n_cols: int):
-        distance_matrix = self.compute_distance_matrix(sample,n_cols,100)
-        cluster_indexes = torch.from_numpy(AgglomerativeClustering(n_clusters=None,metric='precomputed',linkage='single',distance_threshold=0.90).fit_predict(distance_matrix))
-        unique_clusters,counts = torch.unique(cluster_indexes,return_counts=True)
-        cluster_masks = []
-        for i,idx in enumerate(unique_clusters):
-            if counts[i] > 1:
-                cluster_masks.append(cluster_indexes == idx)
-
-        return cluster_masks
+    def compute_mi_matrix(self, log_likelihood_matrix: torch.tensor, n_cols: int) -> torch.Tensor:
+        R,C = log_likelihood_matrix.shape
+        device = log_likelihood_matrix.device
+        mi_matrix = torch.empty((R, R), dtype=torch.float32, device=device)
+        mask = torch.tensor((C,C), dtype=torch.bool, device=device)
+        d = mask.diagonal(offset=0, dim1=-2, dim2=-1)
+        d.zero_()
+        mask[n_cols-1,n_cols-1] = True
+        mask = ~mask.unsqueeze(0).unsqueeze(0)
+        for i in range(0, R):
+            temp = log_likelihood_matrix[i,:].unsqueeze(0).unsqueeze(-1) + log_likelihood_matrix.unsqueeze(-2) # 1,C,1 + R,1,C
+            temp.masked_fill_(mask,-torch.inf)
+            temp = temp - temp.logsumexp(dim=(-1,-2), keepdim=True)
+            temp_log_x = temp.logsumexp(dim=-1, keepdim=True)
+            temp_log_y = temp.logsumexp(dim=-2, keepdim=True)
+            mi = temp.exp()*(temp- (temp_log_x + temp_log_y))
+            mi.masked_fill_(~mi.isfinite(), 0)
+            cross_entropy = temp.exp()*temp
+            cross_entropy.masked_fill_(~cross_entropy.isfinite(), 0)
+            mi_matrix[i,:] = mi.sum(dim=(-1,-2))/cross_entropy.sum(dim=(-1,-2))
+        #
+        return mi_matrix
+    def generateSwapMask(self,sample: torch.Tensor, n_cols: int, mi_threshold: float):
+        mi_matrix = self.compute_mi_matrix(sample,n_cols,100)
+        swap_mask = mi_matrix > mi_threshold
+        return swap_mask
     #
 
     def gibbs_sample(self, sample: torch.Tensor,
@@ -588,17 +542,15 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         n_samples = sample.shape[0]
         n_cols = availableCols.shape[1]
 
-        cluster_masks = self.generateRowClusters(sample,n_cols)
 
-        for cluster in tqdm(range(len(cluster_masks)),desc='Gibbs sample over clusters'):
+        swap_mask = self.generateSwapMask(sample,n_cols,0.01)
+        n_swaps = swap_mask.sum()
+        swap_mask = swap_mask.flatten().expand(sample.shape[0],-1)
 
-            cluster_row_index_order = torch.multinomial(cluster_masks[cluster].type(torch.float32).unsqueeze(0).expand(n_samples*n_sweeps,-1),replacement=False,num_samples=cluster_masks[cluster].sum()).type(torch.int32).squeeze()
-            cluster_row_index_order = cluster_row_index_order.reshape(n_sweeps,n_samples,-1)
-            cluster_row_indexes = torch.nonzero(cluster_masks[cluster]).squeeze()
-            marginals = self.calculatePairwiseMarginalLogits(self._base_row_decision_likelihoods_unnormalized, cluster_row_indexes)
+        swaps = gum
 
-            for sweep in tqdm(range(n_sweeps),desc="Gibbs sweeps"):
-                rand_order = cluster_row_index_order[sweep,...]
+        for sweep in tqdm(range(n_sweeps),desc="Gibbs sweeps"):
+            rand_order = cluster_row_index_order[sweep,...]
                 for i in range(rand_order.shape[1]):
                     row_1 = rand_order[:,i]
                     if i+1 < rand_order.shape[1]: #pairs
@@ -614,7 +566,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
 
                         #choose new state
-                        col1,col2 = self.sampleRandomVariablePairFromMarginal(marginals,availableCols,
+                        col1,col2 = self.sampleRandomVariablePairFromMarginal(availableCols,
                                                                               cluster_row_indexes,
                                                                               row_1,
                                                                               row_2)
@@ -690,6 +642,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
 
     def sample(self,sample_shape=torch.Size()) -> torch.tensor:
+        self._lowest_ess_ratio = 1.0
         sampler = lambda sample, sample_indicies, availableRows, availableCols, decision_log, decision_counter: \
             self._autoregression._getNextInSequence(self._base_row_decision_likelihoods_unnormalized,
                                                     sample,
@@ -703,17 +656,21 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                 self.__getNextInSequence_Plackett_Lucette, (1000,),allow_resample=True)
             self._autoregression = AutoRegressionModel(self._base_row_decision_likelihoods_unnormalized.shape, sample,
                                                        0)
-
-
-            for i in range(5):
-                self.gibbs_sample(sample, sample_indexes, availableCols, n_sweeps=100)
-                self._autoregression._train_auto_regression(sample,
-                                                            unormalized_likelihoods=self._base_row_decision_likelihoods_unnormalized)
-                sample, sample_indexes, availableRows, availableCols, decision_log, gibbs_sample = self._sample(sampler,
-                                                                                                                sample.shape[0:1],allow_resample=True)
-
+            self.gibbs_sample(sample, sample_indexes, availableCols, n_sweeps=100)
+            self._autoregression._train_auto_regression(sample,
+                                                        unormalized_likelihoods=self._base_row_decision_likelihoods_unnormalized)
         #
         sample, sample_indexes, availableRows, availableCols, decision_log, gibbs_sample  = self._sample(sampler,sample_shape)
+        for i in range(5):
+            if  self._lowest_ess_ratio < 0.5:
+                self._lowest_ess_ratio = 1.0
+                self.gibbs_sample(sample, sample_indexes, availableCols, n_sweeps=100)
+                self._autoregression._train_auto_regression(sample,
+                                                        unormalized_likelihoods=self._base_row_decision_likelihoods_unnormalized)
+                sample, sample_indexes, availableRows, availableCols, decision_log, gibbs_sample = self._sample(sampler,
+                                                                                                            sample.shape[
+                                                                                                            0:1],
+                                                                                                            allow_resample=True)
         return sample
 
     def log_prob(self, sample):
@@ -756,6 +713,14 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
     @property
     def missing_mixture_weights(self) -> torch.Tensor:
         return self._missing_mixture_weights
+
+    @property
+    def autoregression(self) -> AutoRegressionModel:
+        return self._autoregression
+
+    @autoregression.setter
+    def autoregression(self, autoregression: AutoRegressionModel):
+        self._autoregression = autoregression
 
 
 
