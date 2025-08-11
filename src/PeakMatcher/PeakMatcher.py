@@ -279,7 +279,6 @@ def maximization(samples: tuple,
                  csp_mixture_priors: torch.tensor,
                  matching_mixture_priors: torch.tensor,
                  missing_mixture_priors: torch.tensor,
-                 auto_reg,
                  max_predicted_dm: float,
                  csp_distribution,
                  optimization_list: list,
@@ -298,7 +297,6 @@ def maximization(samples: tuple,
         optimizer.zero_grad()
         dist = CSPDetectionDistribution(distances, csp_mixture_weights, matching_mixture_weights, missing_mixture_weights, csp_distribution,
                                         no_match_distribution)
-        dist.autoregression = auto_reg
         loss = EM_minimization_function(samples, dist,
                                         csp_mixture_weights,matching_mixture_weights, missing_mixture_weights,
                                         csp_mixture_priors,matching_mixture_priors,missing_mixture_priors, max_predicted_dm)
@@ -341,7 +339,6 @@ def runEMStep(distances: torch.tensor,
               csp_mixture_priors: torch.tensor,
               matching_mixture_priors: torch.tensor,
               missing_mixture_priors: torch.tensor,
-              auto_regression,
               max_predicted_dnm: float,
               csp_distribution: torch.distributions.Distribution,
               non_matching_distribution: torch.distributions.Distribution,
@@ -356,7 +353,6 @@ def runEMStep(distances: torch.tensor,
                                         missing_mixture_weights,
                                         csp_distribution,
                                         non_matching_distribution)
-        dist.autoregression = auto_regression
         #expectation step
         samples = determineSampleSize(sampleSize,dist)
         positionProbs = calculatePositionProb(samples, distances.shape).detach()
@@ -373,7 +369,6 @@ def runEMStep(distances: torch.tensor,
                      csp_mixture_priors,
                      matching_mixture_priors,
                      missing_mixture_priors,
-                     dist.autoregression,
                      max_predicted_dnm,
                      csp_distribution,
                      [csp_distribution.alpha],
@@ -381,14 +376,12 @@ def runEMStep(distances: torch.tensor,
                      learning_rate,
                      gradient_convergence)
         new_non_matching_distribution = non_matching_distribution
-        autoreg = dist.autoregression
         dist = CSPDetectionDistribution(distances,
                                         csp_mixture_weights.log(),
                                         matching_mixture_weights.log(),
                                         missing_mixture_weights.log(),
                                         csp_distribution,
                                         non_matching_distribution)
-        dist.autoregression = autoreg
 
 
 
@@ -443,7 +436,6 @@ def runEM(distances_squared_normalized: torch.tensor,
             csp_mixture_priors,
             matching_mixture_priors,
             missing_mixture_priors,
-            dist.autoregression,
             max_predicted_dnm,
             csp_distribution,
             non_matching_distribution,
@@ -453,12 +445,10 @@ def runEM(distances_squared_normalized: torch.tensor,
 
         sampleSize = len(samples)
 
-        autoreg = dist.autoregression
         dist = CSPDetectionDistribution(distances_squared_normalized, csp_mixture_weights, matching_mixture_weights,
                                         missing_mixture_weights,
                                         csp_distribution,
                                         non_matching_distribution)
-        dist.autoregression = autoreg
 
         matching_probs = calculatePositionProb(samples, distances_squared_normalized.shape).detach()
 
