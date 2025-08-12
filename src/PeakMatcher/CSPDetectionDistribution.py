@@ -116,14 +116,20 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
         current_row_index = row_order[decision_counter]
 
-        logit_corrections = self.row_beam_search_fast(availableCols,self._base_row_decision_likelihoods_unnormalized,row_order,decision_counter)
+        logit_corrections = self.row_beam_search(availableCols,
+                                                      self._base_row_decision_likelihoods_unnormalized,
+                                                      row_order,
+                                                      decision_counter,
+                                                      beam_width=100,
+                                                      max_depth=20)
         log_probabilities = self._base_row_decision_likelihoods_unnormalized[current_row_index,:].unsqueeze(0) + logit_corrections
+        log_probabilities.masked_fill_(~availableCols,-torch.inf)
         log_probabilities -= log_probabilities.logsumexp(dim=-1,keepdim=True)
 
 
         with record_function("Column_Sampling"):
-            matched_columns = torch.multinomial(log_probabilities.exp()*availableCols.type(torch.float32), 1, replacement=True).type(torch.int32).squeeze()
-
+            matched_columns = torch.multinomial(log_probabilities.exp(), 1, replacement=True).type(torch.int32).squeeze()
+            #matched_columns = topk_cols[unmapped_matched_columns].type(torch.int32)
         no_matched_columns = matched_columns >= self._distances.shape[1]
 
         # availableRows[sample_indicies, sampled_rows] = False
@@ -147,15 +153,16 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                   availableRows: torch.Tensor,
                   availableCols: torch.Tensor,
                   decision_log,
+                  decision_counter: int,
                   force_resample=False):
 
         normalized_weights = (sample_weights - sample_weights.logsumexp(dim=-1, keepdim=True)).exp()
         ess = 1.0/torch.pow(normalized_weights,2).sum()
         nsamples = np.prod(sample.shape[0:-1])
         ess_ratio = ess/sample_weights.shape[0]
-        print(f"ESS ratio:, {ess_ratio:0.3f}")
         assert ess.isfinite().all()
         if ess_ratio < 0.5 or force_resample:
+            print(f"{decision_counter}: ESS ratio:, {ess_ratio:0.3f}; Resample")
             # Step 1: Create systematic positions
             positions = (torch.arange(nsamples, dtype=sample_weights.dtype, device=sample_weights.device) +
                          torch.rand(1,dtype=sample_weights.dtype,device=sample_weights.device)) / nsamples
@@ -178,12 +185,15 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         unique_masks, inverse = torch.unique(availableCols, dim=0, return_inverse=True)
         return unique_masks, inverse
 
+    @torch.no_grad()
     def row_beam_search(self,
                         availableCols: torch.Tensor,
                         log_likelihoods: torch.Tensor,
                         ordered_rows: torch.Tensor,
                         current_row: int,
-                        beam_width: int = 10):
+                        beam_width: int = 10,
+                        max_depth: int = 1000):
+
         unique_availableCols, reverse_index = torch.unique(availableCols, dim=0, return_inverse=True)
         n_cols = unique_availableCols.shape[1]
         n_unique_samples = unique_availableCols.shape[0]
@@ -199,7 +209,8 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         future_availableCols.diagonal(dim1=-2, dim2=-1).fill_(False)
         future_availableCols[:, :, n_cols - 1] = True
         future_availableCols = future_availableCols.unsqueeze(-2).expand(-1,-1,beam_width,-1).clone()
-        for i in range(current_row+1,len(ordered_rows)):
+        final_row = min(current_row + max_depth, len(ordered_rows))
+        for i in range(current_row+1,final_row):
             top_cols = future_logsumexps.unsqueeze(-1) + log_likelihoods[ordered_rows[i],:].unsqueeze(0).unsqueeze(0)
             top_cols.masked_fill_(~future_availableCols | ~top_cols.isfinite(),-torch.inf)
 
@@ -220,7 +231,8 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
             log_likelihoods: torch.Tensor,
             ordered_rows: torch.Tensor,
             current_row: int,
-            beam_width: int = 10,
+            beam_width: int = 50,
+            max_depth: int = 5
     ):
         """
         Beam search over columns for each unique mask row.
@@ -235,8 +247,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         Returns
           (N, C) tensor: -logsumexp over beams per initial column, mapped back to N.
         """
-        device = availableCols.device
-        dtype = log_likelihoods.dtype
+
 
         # 1) Deduplicate masks
         unique_masks, reverse_index = torch.unique(
@@ -244,6 +255,13 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         )
         U, C = unique_masks.shape
         B = beam_width
+
+        device = 'mps'
+        dtype = torch.float32
+
+        unique_masks = unique_masks.to(device)
+        log_likelihoods = log_likelihoods.type(dtype).to(device)
+
 
         # 2) Build per-choice masks once and keep 4D shape throughout: (U, C, B, C)
         base = unique_masks.unsqueeze(1).expand(U, C, C).clone()  # (U, C, C)
@@ -255,9 +273,10 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         beam_scores = torch.zeros((U, C, B), dtype=dtype, device=device)
 
         # 4) Iterate over future rows
-        for i in range(current_row + 1, len(ordered_rows)):
+        final_row = min(current_row + max_depth, len(ordered_rows))
+        for i in range(current_row + 1, final_row):
             row_idx = ordered_rows[i]
-            row_ll = log_likelihoods[row_idx].to(dtype).view(1, 1, 1, C)  # (1,1,1,C)
+            row_ll = log_likelihoods[row_idx].view(1, 1, 1, C)  # (1,1,1,C)
 
             # (U,C,B,1) + (1,1,1,C) -> (U,C,B,C)
             scores = beam_scores.unsqueeze(-1) + row_ll
@@ -282,7 +301,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
         # 5) Collapse beams and map back to original N
         out = beam_scores.logsumexp(dim=-1)  # (U, C)
-        return out[reverse_index]  # (N, C)
+        return out[reverse_index].to(availableCols.device)  # (N, C)
     @torch.no_grad()
     def compute_row_entropies(self, log_likelihood_matrix: torch.tensor) -> torch.Tensor:
         entropies = log_likelihood_matrix - log_likelihood_matrix.logsumexp(dim=-1, keepdim=True)
@@ -303,13 +322,13 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         gibbs_sample = False
         row_entropies = self.compute_row_entropies(self._base_row_decision_likelihoods_unnormalized)
         row_order = torch.argsort(row_entropies,descending=False)
-        for _ in row_order:
+        for _ in tqdm(enumerate(row_order),desc="Matching Rows"):
             try:
                 step_weights = self.__getNextInSequence(sample, sample_indexes, row_order, availableCols, decision_log, decision_counter)
                 sample_weights = sample_weights+step_weights
 
                 if allow_resample:
-                    self._resample(sample, sample_weights, availableRows,availableCols,decision_log)
+                    self._resample(sample, sample_weights, availableRows,availableCols,decision_log,decision_counter)
             except Exception as e:
                 raise SamplingError(f"Error during sampling of matching matrices \n"
                                     f"Step: {decision_counter} of {availableRows.shape[0]} \n"
@@ -321,7 +340,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
             decision_counter += 1
 
         if allow_resample:
-            self._resample(sample, sample_weights, availableRows,availableCols,decision_log,True)
+            self._resample(sample, sample_weights, availableRows,availableCols,decision_log,decision_counter)
         #assert torch.abs(self.log_prob(sample) - partial_log_likelihood.sum()) <= 1
         return sample, sample_indexes, availableRows,availableCols, decision_log, gibbs_sample
 
