@@ -69,9 +69,9 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         self.eps_float64 = torch.finfo(torch.float64).eps
         self.max_float64 = torch.finfo(torch.float64).max
         self.min_float64 = torch.finfo(torch.float64).min
-        self._event_shape = torch.Size([self._distances.shape[0],3])
 
         self._calculateDecisionLogLikelihood()
+
     #
     def clone(self):
         return CSPDetectionDistribution(self._distances.detach().clone(),
@@ -167,7 +167,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         with record_function("Column_Sampling"):
             unmapped_matched_columns = torch.multinomial(log_probabilities.exp(), 1, replacement=True).type(torch.int32).squeeze()
             matched_columns = top_k_indicies[unmapped_matched_columns].type(torch.int32)
-        no_matched_columns = matched_columns >= self._distances.shape[1]
+            no_matched_columns = matched_columns >= self._base_row_decision_likelihoods_unnormalized.shape[1] -1
 
         # availableRows[sample_indicies, sampled_rows] = False
 
@@ -370,7 +370,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         availableCols = torch.ones(sample_shape+(self._distances.shape[1]+1,), dtype=torch.bool)
         sample = torch.full(sample_shape+self._event_shape, -2, dtype=torch.int32)
         sample_weights = torch.zeros(sample_shape, dtype=torch.float64)
-        sample_indexes = torch.unique(torch.nonzero(torch.ones_like(sample))[:, :-1])
+        sample_indexes = torch.arange(sample_shape[0], dtype=torch.int32)
         self._calculateDecisionLogLikelihood()
         decision_log = torch.full(sample_shape+(self._distances.shape[0],4),-2, dtype=torch.float64)
         decision_counter = 0

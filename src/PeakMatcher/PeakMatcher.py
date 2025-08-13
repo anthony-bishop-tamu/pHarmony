@@ -283,47 +283,74 @@ def maximization(samples: tuple,
                  learning_rate: float,
                  gradient_convergence: float):
 
-    optimization_list = [ dist.csp_distribution.alpha ]
     PEAK_MATCHER_LOGGER = logging.getLogger(__name__)
-    #optimizer = torch.optim.Adam([csp_assignment_params, csp_distribution_params], lr=1E-3)
-    optimizer = torch.optim.Adam(optimization_list, lr=learning_rate)
-    maxIterators = 1000
-    prevLoss = torch.finfo(torch.float64).max
+    optimizer = torch.optim.Adam([dist.csp_distribution.alpha], lr=learning_rate)
+    prevLoss = float('inf')
     previous_alpha = dist.csp_distribution.alpha.detach().clone()
     previous_scale = dist.csp_distribution.scale.detach().clone()
-    for i in range(maxIterators):
-        optimizer.zero_grad()
-        loss = EM_minimization_function(samples, dist,
-                                        csp_mixture_priors,matching_mixture_priors,missing_mixture_priors, max_predicted_dm)
-        loss.backward()
+
+    for i in range(1000):
+        optimizer.zero_grad(set_to_none=True)
+
+        # (optional) if your CSP class caches stuff, clear/detach it here
+        # dist.clear_cache()  # if you have it
+        # or forcibly detach any non-parameter buffers you keep:
+        # for name, buf in dist.named_buffers(): buf.detach_()  # if Module
+        # otherwise: ensure EM_minimization_function doesn’t cache graph-bearing tensors
+
+        loss = EM_minimization_function(
+            samples, dist, csp_mixture_priors, matching_mixture_priors,
+            missing_mixture_priors, max_predicted_dm
+        )
+        with torch.autograd.set_detect_anomaly(True):  # temporary while debugging
+            loss.backward()
+
+        # snapshot best (detached)
         if prevLoss > loss.item():
-            previous_alpha = dist.csp_distribution.alpha.detach().clone()
-            previous_scale = dist.csp_distribution.scale.detach().clone()
+            previous_alpha.copy_(dist.csp_distribution.alpha.detach())
+            previous_scale.copy_(dist.csp_distribution.scale.detach())
+
         optimizer.step()
 
-        #with torch.no_grad():
-        #    csp_distribution.alpha.clamp_(min=1.0)
+        # logging — keep it out of autograd
         if i % 1 == 0:
-            PEAK_MATCHER_LOGGER.verbose("Step=%6d Loss=%12.3e, diff=%12.3e, csp_alpha=%12.3e, csp_scale=%12.3e csp_alpha_grad=%12.3e csp_scale_grad=%12.3e, lr=%12.3e csp_dist_var= %12.3e max_predicted_dnm=%12.3e", i, loss.item(), prevLoss - loss.item(), dist.csp_distribution.alpha.item(), dist.csp_distribution.scale.item(),
-                                        dist.csp_distribution.alpha.grad.item(), optimizer.param_groups[0]['lr'], dist.csp_distribution.variance(), max_predicted_dm)
-        #
-        if not (torch.tensor([dist.csp_distribution.alpha.item(),dist.csp_distribution.alpha.grad.item()]).isfinite().all() and
-            dist.csp_distribution.alpha.item() > 0 and dist.csp_distribution.scale.item() > 0 and prevLoss-loss.item() >= -1E-3):
+            with torch.no_grad():
+                PEAK_MATCHER_LOGGER.verbose(
+                    "Step=%6d Loss=%12.3e, diff=%12.3e, csp_alpha=%12.3e, csp_scale=%12.3e, "
+                    "csp_alpha_grad=%12.3e, lr=%12.3e, csp_dist_var=%12.3e, max_predicted_dm=%12.3e",
+                    i, loss.item(), prevLoss - loss.item(),
+                    dist.csp_distribution.alpha.item(),
+                    dist.csp_distribution.scale.item(),
+                    dist.csp_distribution.alpha.grad.item(),
+                    optimizer.param_groups[0]['lr'],
+                    float(dist.csp_distribution.variance()),  # ensure scalar+detached
+                    max_predicted_dm
+                )
+
+        # validity checks
+        ok = (
+                torch.tensor([
+                    dist.csp_distribution.alpha.item(),
+                    dist.csp_distribution.alpha.grad.item()
+                ]).isfinite().all()
+                and dist.csp_distribution.alpha.item() > 0
+                and dist.csp_distribution.scale.item() > 0
+                and prevLoss - loss.item() >= -1e-3
+        )
+        if not ok:
             with torch.no_grad():
                 dist.csp_distribution.alpha[0] = previous_alpha[0]
                 dist.csp_distribution.scale[0] = previous_scale[0]
-            optimizer = torch.optim.Adam(optimization_list, lr=optimizer.param_groups[0]['lr'] * 0.5)
-
+            optimizer = torch.optim.Adam([dist.csp_distribution.alpha],
+                                         lr=optimizer.param_groups[0]['lr'] * 0.5)
             PEAK_MATCHER_LOGGER.verbose("Lowering Learning rate")
             continue
-        elif prevLoss - loss.item() < 1e-7 and (torch.abs(torch.tensor([dist.csp_distribution.alpha.grad.item()])) < gradient_convergence).all():
+
+        if prevLoss - loss.item() < 1e-7 and abs(dist.csp_distribution.alpha.grad.item()) < gradient_convergence:
             break
-        #csp_distribution = RegFrechet(csp_distribution.alpha,csp_distribution.max_val,csp_distribution.n)
-        #csp_distribution = Frechet(csp_distribution.alpha,csp_distribution.scale)
+
         prevLoss = loss.item()
-       # if i % 100 == 1 and i > 100:
-       #     optimizer = torch.optim.Adam(optimization_list, lr=optimizer.param_groups[0]['lr'] * 2)
-        #
+        dist = dist.clone()
 
 
     return dist
