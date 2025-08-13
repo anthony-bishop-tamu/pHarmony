@@ -145,30 +145,29 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
         current_row_index = row_order[decision_counter]
 
-        '''logit_corrections, top_k_indicies = self.row_beam_search(availableCols,
+        logit_corrections, top_k_indicies = self.row_beam_search(availableCols,
                                                       self._base_row_decision_likelihoods_unnormalized,
                                                       row_order,
                                                       decision_counter,
-                                                      k=100,
-                                                      beam_width=100,
-                                                      max_depth=max_depths[current_row_index],)'''
-        log_probabilities = self._base_row_decision_likelihoods_unnormalized[current_row_index,:].expand(sample.shape[0],-1).clone() #+ logit_corrections
-        log_probabilities.masked_fill_(~availableCols,-torch.inf)
+                                                      k=50,
+                                                      beam_width=50,
+                                                      max_depth=max_depths[current_row_index])
+        log_probabilities = self._base_row_decision_likelihoods_unnormalized[current_row_index,top_k_indicies].expand(sample.shape[0],-1).clone() + logit_corrections
+        log_probabilities.masked_fill_(~availableCols[:,top_k_indicies],-torch.inf)
         log_probabilities -= log_probabilities.logsumexp(dim=-1,keepdim=True)
 
 
         with record_function("Column_Sampling"):
-            matched_columns = torch.multinomial(log_probabilities.exp(), 1, replacement=True).type(torch.int32).squeeze()
-            #matched_columns = top_k_indicies[unmapped_matched_columns].type(torch.int32)
+            unmapped_matched_columns = torch.multinomial(log_probabilities.exp(), 1, replacement=True).type(torch.int32).squeeze()
+            matched_columns = top_k_indicies[unmapped_matched_columns].type(torch.int32)
         no_matched_columns = matched_columns >= self._distances.shape[1]
 
         # availableRows[sample_indicies, sampled_rows] = False
 
         decision_log[sample_indicies, decision_counter, 0] = row_order[decision_counter].type(torch.float64)
-        decision_log[sample_indicies, decision_counter, 2] = log_probabilities[sample_indicies, matched_columns].type(torch.float64)  # +row_probabilities
+        decision_log[sample_indicies, decision_counter, 2] = log_probabilities[sample_indicies, unmapped_matched_columns].type(torch.float64)  # +row_probabilities
         decision_log[sample_indicies, decision_counter, 3] = self._base_row_decision_likelihoods_unnormalized[current_row_index,matched_columns].type(torch.float64)
         sample_weights = decision_log[sample_indicies, decision_counter, 3] - decision_log[sample_indicies, decision_counter, 2]
-        sample_weights[...] = 1
         assert sample_weights.isfinite().all()
 
         matched_columns[no_matched_columns] = -1
@@ -237,14 +236,16 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         future_availableCols = unique_availableCols.clone().unsqueeze(1).expand(-1,k,-1).clone()
         future_logsumexps = torch.zeros((n_unique_samples,k,beam_width),dtype=torch.float32)
 
+
+
         #Build indexes
         unique_sample_indexes = torch.arange(n_unique_samples).unsqueeze(-1).unsqueeze(-1)
         #column_indexes = torch.arange(n_cols).unsqueeze(-1).unsqueeze(0)
         k_indexes = torch.arange(k).unsqueeze(-1).unsqueeze(0)
         beam_indexes = torch.arange(beam_width).unsqueeze(0).unsqueeze(0)
-
         #Select top k indicies
         _, top_k_col_indexes = torch.topk(log_likelihoods[ordered_rows[current_row]], k=k, dim=-1)
+        #return future_logsumexps[reverse_index, ...].sum(dim=-1), top_k_col_indexes
 
         #Mask out each current decision
         future_availableCols[:, torch.arange(k), top_k_col_indexes] = False
@@ -350,7 +351,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         distance = (1 - W).numpy()
         #cluster_labels = torch.from_numpy(SpectralClustering(affinity='precomputed',assign_labels='cluster_qr').fit_predict(W))
         cluster_labels = torch.from_numpy(AgglomerativeClustering(n_clusters=None,metric='precomputed',linkage='single',distance_threshold=0.99999).fit_predict(distance))
-        distance = scipy.spatial.distance.squareform(distance, checks=True)
+        distance = scipy.spatial.distance.squareform(distance, checks=False)
         unique_clusters, inverse, counts = torch.unique(cluster_labels, return_counts=True, return_inverse=True)
         ordered_linkage = linkage(distance, method='single',optimal_ordering=True)
         ordered_indexes = leaves_list(ordered_linkage)
