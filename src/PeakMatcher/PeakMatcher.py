@@ -203,13 +203,14 @@ def calculateMaxD2FromCSP(csp: float, scaling_factors: torch.tensor, errors: tor
     distances_normalized_squared = distances_normalized**2
     return torch.max(distances_normalized_squared).item()
 def EM_minimization_function(samples, dist: CSPDetectionDistribution,
-                             csp_mixture_weights: torch.Tensor,
-                             matching_mixture_weights: torch.Tensor,
-                             missing_mixture_weights: torch.Tensor,
                              csp_mixture_priors: torch.Tensor,
                              matching_mixture_priors: torch.Tensor,
                              missing_mixture_priors: torch.Tensor,
                              max_predicted_dnm: float):
+
+    csp_mixture_weights = dist.csp_mixture_weights
+    matching_mixture_weights = dist.matching_mixture_weights
+    missing_mixture_weights = dist.missing_mixture_weights
 
     logLikelihoodTerm = dist.log_prob(samples).sum()#/(samples.numel()*dist._distances.numel())
 
@@ -274,57 +275,50 @@ def optimizeOffSet(reference_peak_positions: torch.Tensor,
 
 def maximization(samples: tuple,
                  distances: torch.tensor,
-                 csp_mixture_weights: torch.tensor,
-                 matching_mixture_weights: torch.tensor,
-                 missing_mixture_weights: torch.tensor,
+                 dist: CSPDetectionDistribution,
                  csp_mixture_priors: torch.tensor,
                  matching_mixture_priors: torch.tensor,
                  missing_mixture_priors: torch.tensor,
                  max_predicted_dm: float,
-                 csp_distribution,
-                 optimization_list: list,
-                 no_match_distribution,
                  learning_rate: float,
                  gradient_convergence: float):
 
+    optimization_list = [ dist.csp_distribution.alpha ]
     PEAK_MATCHER_LOGGER = logging.getLogger(__name__)
     #optimizer = torch.optim.Adam([csp_assignment_params, csp_distribution_params], lr=1E-3)
     optimizer = torch.optim.Adam(optimization_list, lr=learning_rate)
     maxIterators = 1000
     prevLoss = torch.finfo(torch.float64).max
-    previous_alpha = csp_distribution.alpha.detach().clone()
-    previous_scale = csp_distribution.scale.detach().clone()
+    previous_alpha = dist.csp_distribution.alpha.detach().clone()
+    previous_scale = dist.csp_distribution.scale.detach().clone()
     for i in range(maxIterators):
         optimizer.zero_grad()
-        dist = CSPDetectionDistribution(distances, csp_mixture_weights, matching_mixture_weights, missing_mixture_weights, csp_distribution,
-                                        no_match_distribution)
         loss = EM_minimization_function(samples, dist,
-                                        csp_mixture_weights,matching_mixture_weights, missing_mixture_weights,
                                         csp_mixture_priors,matching_mixture_priors,missing_mixture_priors, max_predicted_dm)
         loss.backward()
         if prevLoss > loss.item():
-            previous_alpha = csp_distribution.alpha.detach().clone()
-            previous_scale = csp_distribution.scale.detach().clone()
+            previous_alpha = dist.csp_distribution.alpha.detach().clone()
+            previous_scale = dist.csp_distribution.scale.detach().clone()
         optimizer.step()
 
         #with torch.no_grad():
         #    csp_distribution.alpha.clamp_(min=1.0)
         if i % 1 == 0:
-            PEAK_MATCHER_LOGGER.verbose("Step=%6d Loss=%12.3e, diff=%12.3e, csp_alpha=%12.3e, csp_scale=%12.3e csp_alpha_grad=%12.3e csp_scale_grad=%12.3e, lr=%12.3e csp_dist_var= %12.3e max_predicted_dnm=%12.3e", i, loss.item(), prevLoss - loss.item(), csp_distribution.alpha.item(), csp_distribution.scale.item(),
-                                        csp_distribution.alpha.grad.item(), optimizer.param_groups[0]['lr'], csp_distribution.variance(), max_predicted_dm)
+            PEAK_MATCHER_LOGGER.verbose("Step=%6d Loss=%12.3e, diff=%12.3e, csp_alpha=%12.3e, csp_scale=%12.3e csp_alpha_grad=%12.3e csp_scale_grad=%12.3e, lr=%12.3e csp_dist_var= %12.3e max_predicted_dnm=%12.3e", i, loss.item(), prevLoss - loss.item(), dist.csp_distribution.alpha.item(), dist.csp_distribution.scale.item(),
+                                        dist.csp_distribution.alpha.grad.item(), optimizer.param_groups[0]['lr'], dist.csp_distribution.variance(), max_predicted_dm)
         #
-        if not (torch.tensor([csp_distribution.alpha,csp_distribution.alpha.grad]).isfinite().all() and
-            csp_distribution.alpha.item() > 0 and csp_distribution.scale.item() > 0 and prevLoss-loss.item() >= -1E-3):
+        if not (torch.tensor([dist.csp_distribution.alpha.item(),dist.csp_distribution.alpha.grad.item()]).isfinite().all() and
+            dist.csp_distribution.alpha.item() > 0 and dist.csp_distribution.scale.item() > 0 and prevLoss-loss.item() >= -1E-3):
             with torch.no_grad():
-                csp_distribution.alpha[0] = previous_alpha[0]
-                csp_distribution.scale[0] = previous_scale[0]
+                dist.csp_distribution.alpha[0] = previous_alpha[0]
+                dist.csp_distribution.scale[0] = previous_scale[0]
             optimizer = torch.optim.Adam(optimization_list, lr=optimizer.param_groups[0]['lr'] * 0.5)
 
             PEAK_MATCHER_LOGGER.verbose("Lowering Learning rate")
             continue
-        elif prevLoss - loss.item() < 1e-7 and (torch.abs(torch.tensor([csp_distribution.alpha.grad])) < gradient_convergence).all():
+        elif prevLoss - loss.item() < 1e-7 and (torch.abs(torch.tensor([dist.csp_distribution.alpha.grad.item()])) < gradient_convergence).all():
             break
-        csp_distribution = RegFrechet(csp_distribution.alpha,csp_distribution.max_val,csp_distribution.n)
+        #csp_distribution = RegFrechet(csp_distribution.alpha,csp_distribution.max_val,csp_distribution.n)
         #csp_distribution = Frechet(csp_distribution.alpha,csp_distribution.scale)
         prevLoss = loss.item()
        # if i % 100 == 1 and i > 100:
@@ -332,28 +326,20 @@ def maximization(samples: tuple,
         #
 
 
-    return csp_distribution
+    return dist
 def runEMStep(distances: torch.tensor,
-              csp_mixture_weights: torch.tensor,
-              matching_mixture_weights: torch.tensor,
-              missing_mixture_weights: torch.tensor,
+              dist: CSPDetectionDistribution,
               csp_mixture_priors: torch.tensor,
               matching_mixture_priors: torch.tensor,
               missing_mixture_priors: torch.tensor,
               max_predicted_dnm: float,
-              csp_distribution: torch.distributions.Distribution,
-              non_matching_distribution: torch.distributions.Distribution,
               sampleSize: int,
               learning_rate: float,
               gradient_convergence: float,
               display_distributions: bool = False):
 
-        dist = CSPDetectionDistribution(distances,
-                                        csp_mixture_weights,
-                                        matching_mixture_weights,
-                                        missing_mixture_weights,
-                                        csp_distribution,
-                                        non_matching_distribution)
+        #csp_distribution = dist.csp_distribution.clone()
+
         #expectation step
         samples = determineSampleSize(sampleSize,dist)
         positionProbs = calculatePositionProb(samples, distances.shape).detach()
@@ -362,27 +348,19 @@ def runEMStep(distances: torch.tensor,
         csp_mixture_weights, matching_mixture_weights,missing_mixture_weights = calculateMixtureWeights(dist.csp_posterior_probabilities,positionProbs,
                                                                                                         csp_mixture_priors,matching_mixture_priors,missing_mixture_priors)
         #maximization step
-        csp_distribution = maximization(samples,
+        dist = maximization(samples,
                      distances.detach(),
-                     csp_mixture_weights.log(),
-                     matching_mixture_weights.log(),
-                     missing_mixture_weights.log(),
+                     dist,
                      csp_mixture_priors,
                      matching_mixture_priors,
                      missing_mixture_priors,
                      max_predicted_dnm,
-                     csp_distribution,
-                     [csp_distribution.alpha],
-                     non_matching_distribution,
                      learning_rate,
                      gradient_convergence)
-        new_non_matching_distribution = non_matching_distribution
-        dist = CSPDetectionDistribution(distances,
-                                        csp_mixture_weights.log(),
-                                        matching_mixture_weights.log(),
-                                        missing_mixture_weights.log(),
-                                        csp_distribution,
-                                        non_matching_distribution)
+
+        dist.csp_mixture_weights = csp_mixture_weights.log()
+        dist.matching_mixture_weights = matching_mixture_weights.log()
+        dist.missing_mixture_weights = missing_mixture_weights.log()
 
 
 
@@ -390,14 +368,14 @@ def runEMStep(distances: torch.tensor,
             fig = buildPlot(positionProbs,
                         csp_mixture_weights.detach().numpy(),
                         dist.no_csp_distribution,
-                        csp_distribution,
-                        new_non_matching_distribution,
+                        dist.csp_distribution,
+                        dist.non_matching_distribution,
                         distances,
                         0.50)
         
             fig.show()
         #
-        return samples, csp_mixture_weights.log(), matching_mixture_weights.log(), missing_mixture_weights.log(), csp_distribution, new_non_matching_distribution
+        return samples, dist
 #
 def runEM(distances_squared_normalized: torch.tensor,
               initial_csp_mixture_weights: torch.tensor,
@@ -409,9 +387,6 @@ def runEM(distances_squared_normalized: torch.tensor,
               max_predicted_dnm: float,
               initial_csp_distribution: torch.distributions.Distribution,
               initial_non_matching_distribution: torch.distributions.Distribution,
-              sampleSize: int,
-              dist: CSPDetectionDistribution,
-              initial_matching_probs,
               learning_rate: float,
               gradient_convergence: float,
               display_distributions: bool = False):
@@ -424,32 +399,33 @@ def runEM(distances_squared_normalized: torch.tensor,
     missing_mixture_weights = initial_missing_mixture_weights
     csp_distribution = initial_csp_distribution
     non_matching_distribution = initial_non_matching_distribution
-    matching_probs = initial_matching_probs
+
+    dist = CSPDetectionDistribution(distances_squared_normalized,
+                                    csp_mixture_weights,
+                                    matching_mixture_weights,
+                                    missing_mixture_weights,
+                                    csp_distribution,
+                                    non_matching_distribution)
+
+    inital_sample = determineSampleSize(distances_squared_normalized.shape[0],dist)
+    sampleSize = len(inital_sample)
+    matching_probs = calculatePositionProb(inital_sample,distances_squared_normalized.shape)
     for i in range(maxEMSteps):
-        previous_dist = dist
-        previous_csp_dist_params = previous_dist.csp_distribution.param.detach().clone()
+        previous_dist = dist.clone()
+
         previous_matching_probs = matching_probs
-        samples, csp_mixture_weights, matching_mixture_weights, missing_mixture_weights, csp_distribution, non_matching_distribution = runEMStep(
+        samples, dist = runEMStep(
             distances_squared_normalized,
-            csp_mixture_weights,
-            matching_mixture_weights,
-            missing_mixture_weights,
+            dist,
             csp_mixture_priors,
             matching_mixture_priors,
             missing_mixture_priors,
             max_predicted_dnm,
-            csp_distribution,
-            non_matching_distribution,
             sampleSize,
             learning_rate,
             gradient_convergence)
 
         sampleSize = len(samples)
-
-        dist = CSPDetectionDistribution(distances_squared_normalized, csp_mixture_weights, matching_mixture_weights,
-                                        missing_mixture_weights,
-                                        csp_distribution,
-                                        non_matching_distribution)
 
         matching_probs = calculatePositionProb(samples, distances_squared_normalized.shape).detach()
 
@@ -464,7 +440,7 @@ def runEM(distances_squared_normalized: torch.tensor,
             matching_probs,
             0.05,
             0.10)
-        PEAK_MATCHER_LOGGER.info("CSP distribution convergece")
+#        PEAK_MATCHER_LOGGER.info("CSP distribution convergece")
         PEAK_MATCHER_LOGGER.info(f"CSP_dist: { dist.csp_distribution.param.detach() }")
 #        csp_dist_converged, csp_dist_mean, csp_dist_max = verifyTensorConvergence(dist.csp_distribution.param,
 #                                                                                  previous_csp_dist_params,
@@ -496,7 +472,7 @@ def isBetween0And1(x):
         argparse.ArgumentTypeError("Value must be between 0.0 and 1.0.")
 
 def parseArguments():
-    #torch.autograd.set_detect_anomaly(True)
+    torch.autograd.set_detect_anomaly(True)
     parser = argparse.ArgumentParser()
     parser.add_argument('--reference_peak_list', required=True, type=Path, help='reference peak list filename')
     parser.add_argument( '--reference_cs_column_names', required=True, type=str, nargs='+', help='reference cs column names (e.g. \'w1\', \'w2\')')
@@ -540,7 +516,7 @@ def calculateDistancesSquaredNormalized(reference_peak_positions: torch.Tensor,
 
     return distances_squared_normalized
 #
-def determineSampleSize(startingSample,dist):
+def determineSampleSize(startingSample: int,dist: CSPDetectionDistribution):
     PEAK_MATCHER_LOGGER = logging.getLogger(__name__)
     if isinstance(startingSample,int):
         startingSample = dist.sample((startingSample,))
@@ -622,34 +598,20 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
     initial_non_matching_distribution = non_matching_distribution
 
 
-    #GET SAMPLE SIZE
-    sampleSize = distances_squared_normalized.shape[0]
     maxTries = 8
-    samples=()
-    dist = CSPDetectionDistribution(distances_squared_normalized,
-                                    initial_csp_mixture_weights,
-                                    initial_matching_mixture_weights,
-                                    initial_missing_mixture_weights,
-                                    initial_csp_distribution,
-                                    initial_non_matching_distribution)
-    samples = dist.sample((sampleSize,))
-    matching_probs = calculatePositionProb(samples,dist.distances.shape)
     for i in range(maxTries):
     #RUN EM
     # run EM
         dist, matching_probs = runEM(distances_squared_normalized,
-          dist.csp_mixture_weights,
-          dist.matching_mixture_weights,
-          dist.missing_mixture_weights,
+          initial_csp_mixture_weights,
+          initial_matching_mixture_weights,
+          initial_missing_mixture_weights,
           csp_mixture_priors,
           matching_mixture_priors,
           missing_mixture_priors,
           max_predicted_dnm,
-          dist.csp_distribution,
-          dist.non_matching_distribution,
-          sampleSize,
-          dist,
-          matching_probs,
+          initial_csp_distribution,
+          initial_non_matching_distribution,
           learning_rate=0.05,
           gradient_convergence=gradient_convergence)
         if offset.requires_grad:

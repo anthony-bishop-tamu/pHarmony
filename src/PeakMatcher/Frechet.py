@@ -5,11 +5,13 @@ class Frechet(torch.distributions.Distribution):
     support = constraints.positive  # Support of the distribution (x > 0)
 
     def __init__(self, alpha, scale, validate_args=None):
-        self._alpha = alpha  # Shape parameter (fitted_c from SciPy)
-        self._scale = scale # Scale parameter (fitted_scale from SciPy)
+        self._alpha = alpha.detach().requires_grad_(True)  # Shape parameter (fitted_c from SciPy)
+        self._scale = scale.detach().requires_grad_(True) # Scale parameter (fitted_scale from SciPy)
         self._param = torch.cat([self._alpha,self._scale],dim=-1)
         super(Frechet, self).__init__(torch.Size(), validate_args=validate_args)
 
+    def clone(self):
+        return Frechet(self._alpha, self._scale)
     def sample(self, sample_shape=torch.Size()):
         # Generate Weibull samples
         weibull_samples = torch.distributions.Weibull(self._alpha, self._scale).sample(sample_shape)
@@ -71,7 +73,7 @@ class RadialChi2(torch.distributions.Chi2):
 class RegFrechet(Frechet):
     def __init__(self, alpha, max_val, n, validate_args=None):
         scale = torch.pow(max_val,alpha)*torch.log(torch.tensor([2.0]))/n
-        super(RegFrechet, self).__init__(alpha, scale.detach(), validate_args=validate_args)
+        super(RegFrechet, self).__init__(alpha,scale, validate_args=validate_args)
         self._max_val = max_val
         self._n = n
         self._param = torch.cat([self._param,self._max_val,self._n],dim=-1)
@@ -81,6 +83,8 @@ class RegFrechet(Frechet):
     @property
     def n(self):
         return self._n
+    def clone(self):
+        return RegFrechet(self._alpha.detach().clone().requires_grad_(True), self._max_val.detach().clone(), self._n.detach().clone())
 class UniformDistanceSquared(torch.distributions.Distribution):
     arg_constraints = {'_dim': constraints.positive, '_Rmax': constraints.positive}
     def __init__(self,dim, Rmax, validate_args=None):
@@ -89,6 +93,8 @@ class UniformDistanceSquared(torch.distributions.Distribution):
         super(UniformDistanceSquared, self).__init__(torch.Size(), validate_args=validate_args)
     def log_prob(self, x):
         return torch.log(self._dim/(2*self._Rmax)).unsqueeze(-1) + ((self._dim-2.0)/2.0) * torch.log(x)
+    def clone(self):
+        return UniformDistanceSquared(self._dim.detach().clone(), self._Rmax.detach().clone())
 
 class KDEDensity(torch.distributions.Distribution):
     pass

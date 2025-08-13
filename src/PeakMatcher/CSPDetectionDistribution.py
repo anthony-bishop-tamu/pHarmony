@@ -57,10 +57,10 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
         self._distances = distances
 
-        self._csp_mixture_weights = csp_mixture_weights - csp_mixture_weights.logsumexp(dim=0,keepdim=True)
-        self._matching_mixture_weights = matching_mixture_weights - matching_mixture_weights.logsumexp(dim=0, keepdim=True)
-        self._missing_mixture_weights = missing_mixture_weights - missing_mixture_weights.logsumexp(dim=0, keepdim=True)
-        self._csp_distribution = csp_distribution
+        self._csp_mixture_weights = (csp_mixture_weights - csp_mixture_weights.logsumexp(dim=0,keepdim=True)).detach().clone()
+        self._matching_mixture_weights = (matching_mixture_weights - matching_mixture_weights.logsumexp(dim=0, keepdim=True)).detach().clone()
+        self._missing_mixture_weights = (missing_mixture_weights - missing_mixture_weights.logsumexp(dim=0, keepdim=True)).detach().clone()
+        self._csp_distribution = csp_distribution.clone()
        # self._non_matching_parameters =
         self._non_matching_distribution = non_matching_distribution
 
@@ -71,21 +71,28 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         self.min_float64 = torch.finfo(torch.float64).min
         self._event_shape = torch.Size([self._distances.shape[0],3])
 
+        self._calculateDecisionLogLikelihood()
+    #
+    def clone(self):
+        return CSPDetectionDistribution(self._distances.detach().clone(),
+                                        self._csp_mixture_weights.detach().clone(),
+                                        self._matching_mixture_weights.detach().clone(),
+                                        self._missing_mixture_weights.detach().clone(),
+                                        self._csp_distribution.clone(),
+                                        self._non_matching_distribution.clone())
+
+    def _calculateDecisionLogLikelihood(self):
         self._loglikelihoodMatrix = torch.stack((self._no_csp_distribution.log_prob(self._distances).clamp(min=self.min_float64),
                                                 self._csp_distribution.log_prob(self._distances).clamp(min=self.min_float64),
                                                 self._non_matching_distribution.log_prob(self._distances).clamp(min=self.min_float64)),dim=2)
         self._event_shape = (self._distances.shape[0],)
         if self._loglikelihoodMatrix[:,:,1].isnan().any():
-            print(f"Error with CSP dist evaluation: parameters are alpha,scale {csp_distribution.alpha} {csp_distribution.scale}")
+            print(f"Error with CSP dist evaluation: parameters are alpha,scale {self.csp_distribution.alpha} {self.csp_distribution.scale}")
 
         assert not self._loglikelihoodMatrix[:,:,0].isnan().any()
         assert not self._loglikelihoodMatrix[:, :,  1].isnan().any()
         assert not self._loglikelihoodMatrix[:, :, 2].isnan().any()
-        self._calculateDecisionLogLikelihood()
-        self._autoregression = None
-    #
 
-    def _calculateDecisionLogLikelihood(self):
         unnormalized_csp_posterior_probabilities = self._loglikelihoodMatrix[:,:,0:2].detach() + self._csp_mixture_weights.detach()
         self._csp_posterior_probabilities = unnormalized_csp_posterior_probabilities - unnormalized_csp_posterior_probabilities.logsumexp(dim=-1,keepdim=True)
 
@@ -394,7 +401,6 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
 
     def sample(self,sample_shape=torch.Size()) -> torch.tensor:
-
         sample, sample_indexes, avaliableRows,availableCols,decision_log,gibbs_sample = self._sample(sample_shape)
         validateSample(sample,availableCols)
         return sample
@@ -417,6 +423,11 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
     def csp_distribution(self) -> torch.distributions.Distribution:
         return self._csp_distribution
 
+    @csp_distribution.setter
+    def csp_distribution(self, csp_distribution: torch.distributions.Distribution):
+        self._csp_distribution = csp_distribution.clone()
+        self._calculateDecisionLogLikelihood()
+
     @property
     def no_csp_distribution(self) -> torch.distributions.Distribution:
         return self._no_csp_distribution
@@ -432,15 +443,26 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
     def csp_mixture_weights(self) -> torch.Tensor:
         return self._csp_mixture_weights
 
+    @csp_mixture_weights.setter
+    def csp_mixture_weights(self,value):
+        self._csp_mixture_weights = value.detach().clone()
+        self._calculateDecisionLogLikelihood()
+
     @property
     def matching_mixture_weights(self) -> torch.Tensor:
         return self._matching_mixture_weights
 
+    @matching_mixture_weights.setter
+    def matching_mixture_weights(self,value):
+        self._matching_mixture_weights = value.detach().clone()
+        self._calculateDecisionLogLikelihood()
+
     @property
     def missing_mixture_weights(self) -> torch.Tensor:
         return self._missing_mixture_weights
-
-
-
+    @missing_mixture_weights.setter
+    def missing_mixture_weights(self,value):
+        self._missing_mixture_weights = value.detach().clone()
+        self._calculateDecisionLogLikelihood()
 
 #
