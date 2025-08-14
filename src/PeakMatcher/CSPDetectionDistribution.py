@@ -142,12 +142,12 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         current_row_index = row_order[decision_counter]
 
         logit_corrections, top_k_indicies = self.row_beam_search(availableCols,
-                                                      self._base_row_decision_likelihoods_unnormalized,
-                                                      row_order,
-                                                      decision_counter,
-                                                      k=max(10,neighbors[current_row_index].type(torch.int32).item()),
-                                                      beam_width=1000,
-                                                      max_depth=max_depths[current_row_index])
+                                                                 self._base_row_decision_likelihoods_unnormalized,
+                                                                 row_order,
+                                                                 decision_counter,
+                                                                 k=max(10,neighbors[current_row_index].type(torch.int32).item()),
+                                                                 max_beam_width=300,
+                                                                 max_depth=max_depths[current_row_index])
         log_probabilities = self._base_row_decision_likelihoods_unnormalized[current_row_index,top_k_indicies].expand(sample.shape[0],-1).clone() + logit_corrections
         log_probabilities.masked_fill_(~availableCols[:,top_k_indicies],-torch.inf)
         log_probabilities -= log_probabilities.logsumexp(dim=-1,keepdim=True)
@@ -257,8 +257,8 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                         ordered_rows: torch.Tensor,
                         current_row: int,
                         k: int,
-                        beam_width: int,
-                        max_depth: int,):
+                        max_beam_width: int,
+                        max_depth: int, ):
 
         #Check which decisions are still available in at least one sample
         candidate_mask = availableCols.any(dim=0)
@@ -275,7 +275,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         print(f"{n_unique_samples}: Beam search")
         #build structures to use in the looping
         future_availableCols = unique_availableCols.clone().unsqueeze(1).expand(-1,k,-1).clone()
-        future_logsumexps = torch.zeros((n_unique_samples,k,beam_width),dtype=torch.float32)
+        future_logsumexps = torch.zeros((n_unique_samples,k,max_beam_width),dtype=torch.float32)
 
 
 
@@ -283,27 +283,40 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         unique_sample_indexes = torch.arange(n_unique_samples).unsqueeze(-1).unsqueeze(-1)
         #column_indexes = torch.arange(n_cols).unsqueeze(-1).unsqueeze(0)
         k_indexes = torch.arange(k).unsqueeze(-1).unsqueeze(0)
-        beam_indexes = torch.arange(beam_width).unsqueeze(0).unsqueeze(0)
+
 
         #return future_logsumexps[reverse_index, ...].sum(dim=-1), top_k_col_indexes
 
         #Mask out each current decision
         future_availableCols[:, torch.arange(k), top_k_col_indexes] = False
         future_availableCols[:, :, n_cols - 1] = True
-        future_availableCols = future_availableCols.unsqueeze(-2).expand(-1,-1,beam_width,-1).clone()
+        future_availableCols = future_availableCols.unsqueeze(-2).expand(-1, -1, max_beam_width, -1).clone()
         final_row = min(current_row + max_depth, len(ordered_rows))
+        current_beam_width = 1
         for i in range(current_row+1,final_row):
-            top_cols = torch.where(future_availableCols,log_likelihoods[ordered_rows[i],:].unsqueeze(0).unsqueeze(0),-torch.inf)
-            top_cols += future_logsumexps.unsqueeze(-1)
+            active_future_logsumexps = future_logsumexps[:,:,:current_beam_width]
 
+            top_cols = torch.where(future_availableCols[:,:,:current_beam_width,:],
+                                   log_likelihoods[ordered_rows[i],:].unsqueeze(0).unsqueeze(0),
+                                   -torch.inf)
+            top_cols += active_future_logsumexps.unsqueeze(-1)
 
-            top_cols = top_cols.reshape(future_availableCols.shape[0],future_availableCols.shape[1],-1)
-            top_cols,indexes = torch.topk(top_cols,beam_width,dim=-1)
-            beam_idx, col_idx = torch.unravel_index(indexes,(beam_width,n_cols))
-            future_logsumexps = top_cols
-            future_availableCols[unique_sample_indexes,k_indexes,beam_indexes,:] = future_availableCols[unique_sample_indexes,k_indexes,beam_idx,:]
-            future_availableCols[unique_sample_indexes,k_indexes,beam_indexes,col_idx] = False
+            proposed_beam_width = top_cols.shape[-1]*top_cols.shape[-2]
+            top_cols = top_cols.reshape(n_unique_samples, k, -1)
+            if proposed_beam_width > max_beam_width:
+                top_cols,indexes = torch.topk(top_cols, max_beam_width, dim=-1)
+                originating_beam_idx, col_idx = torch.unravel_index(indexes, (current_beam_width, n_cols))
+                proposed_beam_width = max_beam_width
+            else:
+                originating_beam_idx, col_idx = torch.unravel_index(torch.arange(proposed_beam_width), (current_beam_width, n_cols))
+
+            proposed_beam_indexes = torch.arange(proposed_beam_width).unsqueeze(0).unsqueeze(0)
+            #update Beams
+            future_logsumexps[:,:,:proposed_beam_width] = top_cols
+            future_availableCols[unique_sample_indexes,k_indexes,proposed_beam_indexes,:] = future_availableCols[unique_sample_indexes,k_indexes,originating_beam_idx,:]
+            future_availableCols[unique_sample_indexes,k_indexes,proposed_beam_indexes,col_idx] = False
             future_availableCols[...,-1] = True
+            current_beam_width = proposed_beam_width
         #
         future_logsumexps = future_logsumexps.logsumexp(dim=-1)
 
