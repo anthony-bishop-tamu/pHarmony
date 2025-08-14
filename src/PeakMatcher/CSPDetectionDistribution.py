@@ -146,8 +146,8 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                                                                  row_order,
                                                                  decision_counter,
                                                                  k=max(10,neighbors[current_row_index].type(torch.int32).item()),
-                                                                 max_beam_width=300,
-                                                                 max_depth=max_depths[current_row_index])
+                                                                 max_beam_width=100,
+                                                                 max_depth=max(10,max_depths[current_row_index]))
         log_probabilities = self._base_row_decision_likelihoods_unnormalized[current_row_index,top_k_indicies].expand(sample.shape[0],-1).clone() + logit_corrections
         log_probabilities.masked_fill_(~availableCols[:,top_k_indicies],-torch.inf)
         log_probabilities -= log_probabilities.logsumexp(dim=-1,keepdim=True)
@@ -427,7 +427,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
             #self.cluster_count[...] = 10000
         for _ in tqdm(enumerate(self.row_order),desc="Matching Rows"):
             try:
-                step_weights = self.__getNextInSequence(sample, sample_indexes, self.row_order, 2*self.cluster_count,2*self.neighbors , availableCols, decision_log, decision_counter)
+                step_weights = self.__getNextInSequence(sample, sample_indexes, self.row_order, self.cluster_count,2*self.neighbors , availableCols, decision_log, decision_counter)
                 sample_weights = sample_weights+step_weights
 
                 if allow_resample:
