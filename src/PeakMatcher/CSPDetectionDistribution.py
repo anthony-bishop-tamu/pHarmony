@@ -45,6 +45,7 @@ def validateSample(sample: torch.tensor, availableCols: torch.tensor):
 class CSPDetectionDistribution(torch.distributions.Distribution):
     arg_constraints = {}
     def __init__(self, distances: torch.tensor,
+                 max_predicted_dnm: float,
                  csp_mixture_weights: torch.tensor,
                  matching_mixture_weights: torch.tensor,
                  missing_mixture_weights: torch.tensor,
@@ -56,6 +57,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         assert ((2,) == matching_mixture_weights.shape)
 
         self._distances = distances
+        self._max_predicted_dnm = max_predicted_dnm
 
         self._csp_mixture_weights = (csp_mixture_weights - csp_mixture_weights.logsumexp(dim=0,keepdim=True)).detach().clone()
         self._matching_mixture_weights = (matching_mixture_weights - matching_mixture_weights.logsumexp(dim=0, keepdim=True)).detach().clone()
@@ -75,6 +77,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
     #
     def clone(self):
         return CSPDetectionDistribution(self._distances.detach().clone(),
+                                        self._max_predicted_dnm,
                                         self._csp_mixture_weights.detach().clone(),
                                         self._matching_mixture_weights.detach().clone(),
                                         self._missing_mixture_weights.detach().clone(),
@@ -117,35 +120,21 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         self._base_row_decision_probabilities = (self._base_row_decision_likelihoods_unnormalized - self._base_row_decision_likelihoods_unnormalized.logsumexp(dim=-1,keepdim=True)).exp()
 
     @torch.no_grad()
-    def compute_mi_matrix(self, log_likelihood_matrix: torch.tensor) -> torch.Tensor:
-        R,C = log_likelihood_matrix.shape
-        device = log_likelihood_matrix.device
-        mi_matrix = torch.empty((R, R), dtype=torch.float32, device=device)
-        mask = torch.ones((C,C), dtype=torch.bool, device=device)
-        d = mask.diagonal(offset=0, dim1=-2, dim2=-1)
-        d.zero_()
-        mask[C-1,C-1] = True
-        mask = ~mask.unsqueeze(0)
-        for i in range(0, R):
-            temp = log_likelihood_matrix[i,:].unsqueeze(0).unsqueeze(-1) + log_likelihood_matrix.unsqueeze(-2) # 1,C,1 + R,1,C
-            temp.masked_fill_(mask,-torch.inf)
-            temp = temp - temp.logsumexp(dim=(-1,-2), keepdim=True)
-            temp_log_x = temp.logsumexp(dim=-1, keepdim=True)
-            temp_log_y = temp.logsumexp(dim=-2, keepdim=True)
-            mi = temp.exp()*(temp- (temp_log_x + temp_log_y))
-            mi.masked_fill_(temp.exp() == 0, 0)
-            cross_entropy = -temp.exp()*temp
-            cross_entropy.masked_fill_(temp.exp() == 0, 0)
-            mi_matrix[i,:] = mi.sum(dim=(-1,-2))/cross_entropy.sum(dim=(-1,-2))
-            mi_matrix[i,i] = 1.0
-        #
-        return mi_matrix
+    def computeLinkageMatrix(self):
+        n_rows = self._distances.shape[0]
+        n_cols = self._distances.shape[1]
+        linkage_matrix = torch.zeros((n_rows,n_rows),dtype=torch.float64)
+        neighborhood_mask = self.distances < self._max_predicted_dnm
+        linkage_matrix = neighborhood_mask.unsqueeze(-2) & neighborhood_mask.unsqueeze(0)
+        linkage_matrix = linkage_matrix.type(torch.float64).sum(dim=-1)
+        return linkage_matrix, neighborhood_mask.type(torch.float64).sum(dim=-1)
 
     def __getNextInSequence(self,
                                              sample: torch.tensor,
                                              sample_indicies: torch.tensor,
                                              row_order: torch.tensor,
                                              max_depths: torch.tensor,
+                                             neighbors: torch.tensor,
                                              availableCols: torch.tensor,
                                              decision_log: torch.tensor,
                                              decision_counter: int):
@@ -156,8 +145,8 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                                                       self._base_row_decision_likelihoods_unnormalized,
                                                       row_order,
                                                       decision_counter,
-                                                      k=50,
-                                                      beam_width=50,
+                                                      k=max(10,neighbors[current_row_index].type(torch.int32).item()),
+                                                      beam_width=1000,
                                                       max_depth=max_depths[current_row_index])
         log_probabilities = self._base_row_decision_likelihoods_unnormalized[current_row_index,top_k_indicies].expand(sample.shape[0],-1).clone() + logit_corrections
         log_probabilities.masked_fill_(~availableCols[:,top_k_indicies],-torch.inf)
@@ -223,6 +212,44 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         unique_masks, inverse = torch.unique(availableCols, dim=0, return_inverse=True)
         return unique_masks, inverse
 
+    def unique_rows_by_bits(self,
+                            mask: torch.Tensor,
+                            bit_idx: torch.Tensor,
+                            return_counts: bool = False,
+                            return_representatives: bool = True):
+        """
+        mask: [N, B] bool/0-1 tensor
+        bit_idx: 1D LongTensor of columns (bits) to consider for uniqueness
+
+        Returns:
+          unique_keys: [K, len(bit_idx)] the unique row patterns restricted to bit_idx
+          inverse: [N] int mapping each row -> its unique_keys index (0..K-1)
+          counts: [K] (optional) how many rows map to each unique
+          reps_full: [K, B] (optional) representative full rows from the original mask
+        """
+        # restrict to the subset of bits (columns)
+        keys = mask[:, bit_idx]  # [N, |bits|]
+
+        # unique rows based on those bits
+        out = torch.unique(keys, dim=0, return_inverse=True, return_counts=return_counts)
+        if return_counts:
+            unique_keys, inverse, counts = out
+        else:
+            unique_keys, inverse = out
+            counts = None
+
+        reps_full = None
+        if return_representatives:
+            # pick the first occurrence row for each unique pattern
+            # (stable argsort + cumsum trick)
+            if counts is None:
+                _, _, counts = torch.unique(keys, dim=0, return_inverse=True, return_counts=True)
+            order = torch.argsort(inverse, stable=True)
+            starts = torch.cat([inverse.new_zeros(1), counts.cumsum(0)[:-1]])
+            rep_idx = order[starts]
+            reps_full = mask[rep_idx]  # representative full rows
+
+        return unique_keys, inverse, counts, reps_full
     @torch.no_grad()
     def row_beam_search(self,
                         availableCols: torch.Tensor,
@@ -233,8 +260,15 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                         beam_width: int,
                         max_depth: int,):
 
+        #Check which decisions are still available in at least one sample
+        candidate_mask = availableCols.any(dim=0)
+        candidate_likelihoods = log_likelihoods[ordered_rows[current_row],:].masked_fill_(~candidate_mask, -torch.inf)
+        #Select top k indicies
+        _, top_k_col_indexes = torch.topk(candidate_likelihoods, k=k, dim=-1)
+        _, reverse_index, _ , unique_availableCols = self.unique_rows_by_bits(availableCols, top_k_col_indexes)
+        #unique_availableCols, reverse_index = torch.unique(availableCols[:,top_k_col_indexes], dim=0, return_inverse=True)
 
-        unique_availableCols, reverse_index = torch.unique(availableCols, dim=0, return_inverse=True)
+
         n_cols = unique_availableCols.shape[1]
         k = min(k, n_cols)
         n_unique_samples = unique_availableCols.shape[0]
@@ -250,8 +284,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         #column_indexes = torch.arange(n_cols).unsqueeze(-1).unsqueeze(0)
         k_indexes = torch.arange(k).unsqueeze(-1).unsqueeze(0)
         beam_indexes = torch.arange(beam_width).unsqueeze(0).unsqueeze(0)
-        #Select top k indicies
-        _, top_k_col_indexes = torch.topk(log_likelihoods[ordered_rows[current_row]], k=k, dim=-1)
+
         #return future_logsumexps[reverse_index, ...].sum(dim=-1), top_k_col_indexes
 
         #Mask out each current decision
@@ -354,15 +387,16 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         return out[reverse_index].to(availableCols.device)  # (N, C)
     @torch.no_grad()
     def determineRowOrder(self, log_likelihood_matrix: torch.tensor):
-        W = self.compute_mi_matrix(log_likelihood_matrix)
-        distance = (1 - W).numpy()
+        W,neighbors = self.computeLinkageMatrix()
+        distance = W.numpy()
+        distance = 1 - distance/np.max(distance, axis=1)
         #cluster_labels = torch.from_numpy(SpectralClustering(affinity='precomputed',assign_labels='cluster_qr').fit_predict(W))
-        cluster_labels = torch.from_numpy(AgglomerativeClustering(n_clusters=None,metric='precomputed',linkage='single',distance_threshold=0.99999).fit_predict(distance))
+        cluster_labels = torch.from_numpy(AgglomerativeClustering(n_clusters=None,metric='precomputed',linkage='single',distance_threshold=0.95).fit_predict(distance))
         distance = scipy.spatial.distance.squareform(distance, checks=False)
         unique_clusters, inverse, counts = torch.unique(cluster_labels, return_counts=True, return_inverse=True)
         ordered_linkage = linkage(distance, method='single',optimal_ordering=True)
         ordered_indexes = leaves_list(ordered_linkage)
-        return torch.from_numpy(ordered_indexes), counts[inverse][ordered_indexes]
+        return torch.from_numpy(ordered_indexes), counts[inverse][ordered_indexes],neighbors
 
     #
     def _sample(self, sample_shape=torch.Size(), allow_resample=True) -> torch.tensor:
@@ -376,10 +410,11 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         decision_counter = 0
         gibbs_sample = False
         if not hasattr(self,'row_order'):
-            self.row_order,self.cluster_count = self.determineRowOrder(self._base_row_decision_likelihoods_unnormalized)
+            self.row_order,self.cluster_count, self.neighbors = self.determineRowOrder(self._base_row_decision_likelihoods_unnormalized)
+            #self.cluster_count[...] = 10000
         for _ in tqdm(enumerate(self.row_order),desc="Matching Rows"):
             try:
-                step_weights = self.__getNextInSequence(sample, sample_indexes, self.row_order, 2*self.cluster_count, availableCols, decision_log, decision_counter)
+                step_weights = self.__getNextInSequence(sample, sample_indexes, self.row_order, 2*self.cluster_count,2*self.neighbors , availableCols, decision_log, decision_counter)
                 sample_weights = sample_weights+step_weights
 
                 if allow_resample:

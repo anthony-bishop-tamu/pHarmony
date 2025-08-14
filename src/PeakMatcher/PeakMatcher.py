@@ -428,6 +428,7 @@ def runEM(distances_squared_normalized: torch.tensor,
     non_matching_distribution = initial_non_matching_distribution
 
     dist = CSPDetectionDistribution(distances_squared_normalized,
+                                    max_predicted_dnm,
                                     csp_mixture_weights,
                                     matching_mixture_weights,
                                     missing_mixture_weights,
@@ -543,6 +544,10 @@ def calculateDistancesSquaredNormalized(reference_peak_positions: torch.Tensor,
 
     return distances_squared_normalized
 #
+def calculateReferencePeakDistances(reference_peak_positions: torch.Tensor, csp_scaling_factors: torch.Tensor) -> torch.Tensor:
+    distances_squared  = (reference_peak_positions.unsqueeze(0) - reference_peak_positions.unsqueeze(1))/csp_scaling_factors.unsqueeze(0).unsqueeze(0)
+    distances_squared = torch.square(distances_squared).sum(dim=-1)
+    return torch.sqrt(distances_squared)
 def determineSampleSize(startingSample: int,dist: CSPDetectionDistribution):
     PEAK_MATCHER_LOGGER = logging.getLogger(__name__)
     if isinstance(startingSample,int):
