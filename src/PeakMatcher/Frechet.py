@@ -5,13 +5,13 @@ class Frechet(torch.distributions.Distribution):
     support = constraints.positive  # Support of the distribution (x > 0)
 
     def __init__(self, alpha, scale, validate_args=None):
-        self._alpha = alpha.detach().requires_grad_(True)  # Shape parameter (fitted_c from SciPy)
-        self._scale = scale.detach().requires_grad_(True) # Scale parameter (fitted_scale from SciPy)
+        self._alpha = alpha.requires_grad_(True)  # Shape parameter (fitted_c from SciPy)
+        self._scale = scale.requires_grad_(True) # Scale parameter (fitted_scale from SciPy)
         self._param = torch.cat([self._alpha,self._scale],dim=-1)
         super(Frechet, self).__init__(torch.Size(), validate_args=validate_args)
 
     def clone(self):
-        return Frechet(self._alpha, self._scale)
+        return Frechet(self._alpha.detach().clone(), self._scale.detach().clone())
     def sample(self, sample_shape=torch.Size()):
         # Generate Weibull samples
         weibull_samples = torch.distributions.Weibull(self._alpha, self._scale).sample(sample_shape)

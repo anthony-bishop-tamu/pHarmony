@@ -100,11 +100,11 @@ def initalizeAllComponents(distances, dims, max_predicted_dm, max_CSP_count):
     csp_weights = initial_weights[:,:,1]
     no_matching_weights = initial_weights[:,:,2]
 
-    csp_distribution = RegFrechet(torch.tensor([1],dtype=torch.float64,requires_grad=True),
-                                     torch.tensor([max_predicted_dm],dtype=torch.float64),
-                                     torch.tensor([max_CSP_count],dtype=torch.float64))
+    #csp_distribution = RegFrechet(torch.tensor([1],dtype=torch.float64,requires_grad=True),
+    #                                 torch.tensor([max_predicted_dm],dtype=torch.float64),
+    #                                 torch.tensor([max_CSP_count],dtype=torch.float64))
     #csp_distribution = Frechet(csp_distribution.alpha.detach().clone().requires_grad_(True),csp_distribution.scale.detach().clone().requires_grad_(True))
-    #csp_distribution=Frechet(torch.tensor([2.0],requires_grad=True),torch.tensor([30.0],requires_grad=True))
+    csp_distribution=Frechet(torch.tensor([2.0],requires_grad=True),torch.tensor([10.0],requires_grad=True))
 
     non_matching_distribution = UniformDistanceSquared(dim=torch.tensor(dims,dtype=torch.float64),
                                                        Rmax=distances.max(dim=-1)[0])
@@ -116,7 +116,7 @@ def initalizeAllComponents(distances, dims, max_predicted_dm, max_CSP_count):
     matching_mixture_weights = torch.stack(((initial_weights[:,:,0:2]).sum(), (1.0-initial_weights[:,:,0:2]).sum()),dim=0)
     matching_mixture_weights /= matching_mixture_weights.sum()
 
-    return csp_distribution, non_matching_distribution, csp_conditional_mixture_weights, matching_mixture_weights
+    return csp_distribution, non_matching_distribution, csp_conditional_mixture_weights.log(), matching_mixture_weights.log()
 #
 def getPeakPositionsFromFile(filename, cs_cols, uncertaintycols=None, fixedError=None):
     df = pd.read_csv(filename,sep="\s+")
@@ -284,14 +284,14 @@ def maximization(samples: tuple,
                  gradient_convergence: float):
 
     PEAK_MATCHER_LOGGER = logging.getLogger(__name__)
-    optimizer = torch.optim.Adam([dist.csp_distribution.alpha], lr=learning_rate)
+
     prevLoss = float('inf')
     previous_alpha = dist.csp_distribution.alpha.detach().clone()
     previous_scale = dist.csp_distribution.scale.detach().clone()
-
+    optimizer = torch.optim.Adam([dist.csp_distribution.alpha, dist.csp_distribution.scale], lr=learning_rate)
     for i in range(1000):
         optimizer.zero_grad(set_to_none=True)
-
+        dist._detach()
         # (optional) if your CSP class caches stuff, clear/detach it here
         # dist.clear_cache()  # if you have it
         # or forcibly detach any non-parameter buffers you keep:
@@ -315,7 +315,7 @@ def maximization(samples: tuple,
         # logging — keep it out of autograd
         if i % 1 == 0:
             with torch.no_grad():
-                PEAK_MATCHER_LOGGER.verbose(
+                PEAK_MATCHER_LOGGER.info(
                     "Step=%6d Loss=%12.3e, diff=%12.3e, csp_alpha=%12.3e, csp_scale=%12.3e, "
                     "csp_alpha_grad=%12.3e, lr=%12.3e, csp_dist_var=%12.3e, max_predicted_dm=%12.3e",
                     i, loss.item(), prevLoss - loss.item(),
@@ -341,7 +341,7 @@ def maximization(samples: tuple,
             with torch.no_grad():
                 dist.csp_distribution.alpha[0] = previous_alpha[0]
                 dist.csp_distribution.scale[0] = previous_scale[0]
-            optimizer = torch.optim.Adam([dist.csp_distribution.alpha],
+            optimizer = torch.optim.Adam([dist.csp_distribution.alpha, dist.csp_distribution.scale],
                                          lr=optimizer.param_groups[0]['lr'] * 0.5)
             PEAK_MATCHER_LOGGER.verbose("Lowering Learning rate")
             continue
@@ -350,7 +350,8 @@ def maximization(samples: tuple,
             break
 
         prevLoss = loss.item()
-        dist = dist.clone()
+        #dist = dist.clone()
+        #optimizer = torch.optim.Adam([dist.csp_distribution.alpha, dist.csp_distribution.scale], lr=optimizer.param_groups[0]['lr'])
 
 
     return dist
@@ -469,7 +470,7 @@ def runEM(distances_squared_normalized: torch.tensor,
             0.05,
             0.10)
 #        PEAK_MATCHER_LOGGER.info("CSP distribution convergece")
-        PEAK_MATCHER_LOGGER.info(f"CSP_dist: { dist.csp_distribution.param.detach() }")
+        PEAK_MATCHER_LOGGER.info(f"CSP_dist: { dist.csp_distribution.alpha}, {dist.csp_distribution.scale }")
 #        csp_dist_converged, csp_dist_mean, csp_dist_max = verifyTensorConvergence(dist.csp_distribution.param,
 #                                                                                  previous_csp_dist_params,
 #                                                                                  0.05,0.05)
@@ -607,8 +608,8 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
                                                                          variance=variance_scale_fraction_missing * match_std ** 2)  # [matching, nonmatching)
     fraction_possible_matched_rows = min(1,float(distances_squared_normalized.shape[1])/distances_squared_normalized.shape[0])
     max_fraction_missing_rows = 1 - fraction_possible_matched_rows
-    #expected_fraction_missing_rows =  max(expected_fraction_missing,1-(1-max_fraction_missing_rows)*(1-expected_fraction_missing))
-    expected_fraction_missing_rows = expected_fraction_missing
+    expected_fraction_missing_rows =  max(expected_fraction_missing,1-(1-max_fraction_missing_rows)*(1-expected_fraction_missing))
+    #expected_fraction_missing_rows = expected_fraction_missing
     PEAK_MATCHER_LOGGER.info(
         f"fraction_possilbe_matched_rows: {fraction_possible_matched_rows}, expected_fraction_missing_rows: {expected_fraction_missing_rows}, expected_fraction_missing: {expected_fraction_missing}")
     missing_mixture_priors = calculateBetaParametersFromMeanAndVariance(mean=1.0 - expected_fraction_missing_rows,
@@ -625,7 +626,7 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
 
     initial_missing_mixture_weights = missing_mixture_priors.log().detach().clone()
     initial_matching_mixture_weights = matching_mixture_weights.detach().clone()
-    initial_csp_mixture_weights = csp_mixture_weights.detach().clone()
+    initial_csp_mixture_weights = csp_mixture_priors.log().detach().clone()
     initial_csp_distribution = csp_distribution
     initial_non_matching_distribution = non_matching_distribution
 
