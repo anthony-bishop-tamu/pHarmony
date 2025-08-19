@@ -144,14 +144,32 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         self._base_row_decision_likelihoods_unnormalized = None
 
     @torch.no_grad()
-    def computeDistanceMatrix(self):
-        n_rows = self._distances.shape[0]
-        neighborhood_mask = self.distances < self._max_predicted_dnm
-        linkage_matrix = neighborhood_mask.unsqueeze(-2) & neighborhood_mask.unsqueeze(0)
-        linkage_matrix = linkage_matrix.type(torch.float64).sum(dim=-1)
-        d = linkage_matrix.diagonal(dim1=-1, dim2=-2)
-        d[...] += 1
-        return linkage_matrix.clamp(min=0.01)
+    def compute_mi_matrix(self, log_likelihood_matrix: torch.tensor) -> torch.Tensor:
+        R, C = log_likelihood_matrix.shape
+        device = log_likelihood_matrix.device
+        mi_matrix = torch.empty((R, R), dtype=torch.float32, device=device)
+        mask = torch.ones((C, C), dtype=torch.bool, device=device)
+        d = mask.diagonal(offset=0, dim1=-2, dim2=-1)
+        d.zero_()
+        mask[C - 1, C - 1] = True
+        mask = ~mask.unsqueeze(0)
+        for i in range(0, R):
+            temp = log_likelihood_matrix[i, :].unsqueeze(0).unsqueeze(-1) + log_likelihood_matrix.unsqueeze(
+                -2)  # 1,C,1 + R,1,C
+            temp.masked_fill_(mask, -torch.inf)
+            temp = temp - temp.logsumexp(dim=(-1, -2), keepdim=True)
+            temp_log_x = temp.logsumexp(dim=-1, keepdim=True)
+            temp_log_y = temp.logsumexp(dim=-2, keepdim=True)
+            mi = temp.exp() * (temp - (temp_log_x + temp_log_y))
+            mi.masked_fill_(temp.exp() == 0, 0)
+            cross_entropy = -temp.exp() * temp
+            cross_entropy.masked_fill_(temp.exp() == 0, 0)
+            mi_matrix[i, :] = mi.sum(dim=(-1, -2))
+            mi_matrix[i, i] = cross_entropy[i].sum(dim=(-1, -2))
+        #
+        self._mi_matrix = mi_matrix
+        min = torch.min(mi_matrix[mi_matrix > 0])
+        self._mi_matrix.clamp_(min=min/2)
 
     def __getNextInSequence(self,
                                              sample: torch.tensor,
@@ -169,7 +187,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                                                                  self._base_row_decision_likelihoods_unnormalized,
                                                                  row_order,
                                                                  decision_counter,
-                                                                 k=max(5,neighbor_count[current_row_index]),
+                                                                 k=10,
                                                                  max_beam_width=100,
                                                                  max_depth=max(5,max_depths[decision_counter]),)
 
@@ -291,7 +309,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
         n_cols = availableCols.shape[1]
         k = min(k, n_cols)
-        print(f"Running Beam Search k:{k}, max_beam_width:{max_beam_width}, max_depth:{max_depth}")
+
         #Check which decisions are still available in at least one sample
         candidate_mask = availableCols.any(dim=0)
         candidate_likelihoods = log_likelihoods[ordered_rows[current_row],:].masked_fill(~candidate_mask, -torch.inf)
@@ -308,7 +326,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         future_availableCols = unique_availableCols.clone().unsqueeze(1).expand(-1,k,-1).clone()
         future_logsumexps = torch.zeros((n_unique_samples,k,max_beam_width),dtype=torch.float32)
 
-
+        print(f"Running Beam Search: unique: {n_unique_samples}, k:{k}, max_beam_width:{max_beam_width}, max_depth:{max_depth}")
 
         #Build indexes
         unique_sample_indexes = torch.arange(n_unique_samples).unsqueeze(-1).unsqueeze(-1)
@@ -358,10 +376,22 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
     #
     @torch.no_grad()
     def determineRowOrder(self, log_likelihood_matrix: torch.tensor):
-        W = self.computeDistanceMatrix()
-        distance = 1.0/W.numpy()
+        faux = torch.ones_like(log_likelihood_matrix)
+        d = faux.diagonal(dim1=-1, dim2=-2)
+        d[:-1] = 0
+        faux /= faux.sum()
+        log_faux = faux.log()
+        log_faux_x = log_faux.logsumexp(dim=-1,keepdim=True)
+        log_faux_y = log_faux.logsumexp(dim=-2,keepdim=True)
+        faux_mi = torch.where(faux.log().isfinite(), faux*(log_faux-log_faux_x-log_faux_y),0).sum()
+
+        threshold = 1.0/faux_mi.item()
+
+        if not hasattr(self,'_mi_matrix'):
+            self.compute_mi_matrix(self._base_row_decision_likelihoods_unnormalized)
+        distance = 1.0/self._mi_matrix.numpy()
         #cluster_labels = torch.from_numpy(SpectralClustering(affinity='precomputed',assign_labels='cluster_qr').fit_predict(W))
-        model = AgglomerativeClustering(n_clusters=None,metric='precomputed',linkage='single',distance_threshold=0.99).fit(distance)
+        model = AgglomerativeClustering(n_clusters=None,metric='precomputed',linkage='single',distance_threshold=threshold).fit(distance)
         linkage = to_linkage(model)
         cluster_labels = torch.from_numpy(model.labels_)
         unique_clusters, inverse, counts = torch.unique(cluster_labels, return_counts=True, return_inverse=True)
@@ -379,7 +409,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         return torch.from_numpy(ordered_indexes), max_depths, neighbor_count
 
     #
-    def _sample(self, sample_shape=torch.Size(), allow_resample=True) -> torch.tensor:
+    def _sample(self, sample_shape=torch.Size()) -> torch.tensor:
         availableRows = torch.ones(sample_shape+(self._distances.shape[0],), dtype=torch.bool)
         availableCols = torch.ones(sample_shape+(self._distances.shape[1]+1,), dtype=torch.bool)
         sample = torch.full(sample_shape+self._event_shape, -2, dtype=torch.int32)
@@ -399,8 +429,8 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                 step_weights = self.__getNextInSequence(sample, sample_indexes, row_order,max_depths,neighbor_count, availableCols, decision_log, decision_counter)
                 sample_weights = sample_weights+step_weights
 
-                if allow_resample:
-                    self._resample(sample, sample_weights, availableRows,availableCols,decision_log,decision_counter,ESS_History)
+                if max_depths[decision_counter] == 0:
+                    self._resample(sample, sample_weights, availableRows,availableCols,decision_log,decision_counter,ESS_History,force_resample=True)
             except Exception as e:
                 raise SamplingError(f"Error during sampling of matching matrices \n"
                                     f"Step: {decision_counter} of {availableRows.shape[0]} \n"
@@ -411,7 +441,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
             decision_counter += 1
 
-        self._resample(sample, sample_weights, availableRows,availableCols,decision_log,decision_counter,ESS_History,force_resample=True)
+        #self._resample(sample, sample_weights, availableRows,availableCols,decision_log,decision_counter,ESS_History,force_resample=True)
         #assert torch.abs(self.log_prob(sample) - partial_log_likelihood.sum()) <= 1
         return sample, sample_indexes, availableRows,availableCols, decision_log, gibbs_sample
 
