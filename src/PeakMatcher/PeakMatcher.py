@@ -100,11 +100,11 @@ def initalizeAllComponents(distances, dims, max_predicted_dm, max_CSP_count):
     csp_weights = initial_weights[:,:,1]
     no_matching_weights = initial_weights[:,:,2]
 
-    #csp_distribution = RegFrechet(torch.tensor([1],dtype=torch.float64,requires_grad=True),
-    #                                 torch.tensor([max_predicted_dm],dtype=torch.float64),
-    #                                 torch.tensor([max_CSP_count],dtype=torch.float64))
-    #csp_distribution = Frechet(csp_distribution.alpha.detach().clone().requires_grad_(True),csp_distribution.scale.detach().clone().requires_grad_(True))
-    csp_distribution=Frechet(torch.tensor([2.0],requires_grad=True),torch.tensor([10.0],requires_grad=True))
+    csp_distribution = RegFrechet(torch.tensor([1],dtype=torch.float64,requires_grad=True),
+                                     torch.tensor([max_predicted_dm],dtype=torch.float64),
+                                     torch.tensor([max_CSP_count],dtype=torch.float64))
+    csp_distribution = Frechet(csp_distribution.alpha.detach().clone().requires_grad_(True),csp_distribution.scale.detach().clone().requires_grad_(True))
+    #csp_distribution=Frechet(torch.tensor([2.0],requires_grad=True),torch.tensor([10.0],requires_grad=True))
 
     non_matching_distribution = UniformDistanceSquared(dim=torch.tensor(dims,dtype=torch.float64),
                                                        Rmax=distances.max(dim=-1)[0])

@@ -16,6 +16,19 @@ class EnumerationError(Exception):
     pass
 from tqdm import tqdm
 
+def to_linkage(model):
+    children = model.children_
+    n = model.labels_.size
+    # counts: number of original samples under each merge
+    counts = np.zeros(children.shape[0], dtype=float)
+    for i, (a, b) in enumerate(children):
+        ca = 1 if a < n else counts[a - n]
+        cb = 1 if b < n else counts[b - n]
+        counts[i] = ca + cb
+    Z = np.column_stack([children, model.distances_, counts]).astype(float)
+    return Z
+
+
 def sample_gumbel(shape, device=None, dtype=None, generator=None):
     u = torch.rand(shape, device=device, dtype=dtype, generator=generator)
     return -torch.log(-torch.log(u))
@@ -131,19 +144,21 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         self._base_row_decision_likelihoods_unnormalized = None
 
     @torch.no_grad()
-    def computeLinkageMatrix(self):
+    def computeDistanceMatrix(self):
         n_rows = self._distances.shape[0]
-        neighborhood_mask = self.distances < self._max_predicted_dnm*3
+        neighborhood_mask = self.distances < self._max_predicted_dnm
         linkage_matrix = neighborhood_mask.unsqueeze(-2) & neighborhood_mask.unsqueeze(0)
         linkage_matrix = linkage_matrix.type(torch.float64).sum(dim=-1)
-        return linkage_matrix
+        d = linkage_matrix.diagonal(dim1=-1, dim2=-2)
+        d[...] += 1
+        return linkage_matrix.clamp(min=0.01)
 
     def __getNextInSequence(self,
                                              sample: torch.tensor,
                                              sample_indicies: torch.tensor,
                                              row_order: torch.tensor,
                                              max_depths: torch.tensor,
-                                             neighbors: torch.tensor,
+                                             neighbor_count: torch.tensor,
                                              availableCols: torch.tensor,
                                              decision_log: torch.tensor,
                                              decision_counter: int):
@@ -154,9 +169,9 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                                                                  self._base_row_decision_likelihoods_unnormalized,
                                                                  row_order,
                                                                  decision_counter,
-                                                                 k=10,
-                                                                 max_beam_width=200,
-                                                                 max_depth=20)
+                                                                 k=max(5,neighbor_count[current_row_index]),
+                                                                 max_beam_width=100,
+                                                                 max_depth=max(5,max_depths[decision_counter]),)
 
         log_probabilities.masked_fill_(~availableCols[:,top_k_indicies],-torch.inf)
         log_probabilities -= log_probabilities.logsumexp(dim=-1,keepdim=True)
@@ -189,6 +204,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                   availableCols: torch.Tensor,
                   decision_log,
                   decision_counter: int,
+                  ESS_History: torch.tensor,
                   force_resample=False):
 
         normalized_weights = (sample_weights - sample_weights.logsumexp(dim=-1, keepdim=True)).exp()
@@ -196,7 +212,11 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         nsamples = np.prod(sample.shape[0:-1])
         ess_ratio = ess/sample_weights.shape[0]
         assert ess.isfinite().all()
-        if ess_ratio < 0 or force_resample:
+        min = max(0,decision_counter-10)
+        if decision_counter < ESS_History.shape[0]:
+            ESS_History[decision_counter] = ess_ratio
+        resample = (ESS_History[min:decision_counter] < 0.5).all()
+        if resample or force_resample:
             print(f"{decision_counter}: ESS ratio:, {ess_ratio:0.3f}; Resample")
             # Step 1: Create systematic positions
             positions = (torch.arange(nsamples, dtype=sample_weights.dtype, device=sample_weights.device) +
@@ -214,7 +234,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
             decision_log[...,...] =decision_log[indices,...]
             return ess/nsamples < 0.25
         else:
-            #print(f"{decision_counter}: ESS ratio:, {ess_ratio:0.3f}")
+            print(f"{decision_counter}: ESS ratio:, {ess_ratio:0.3f}")
             return False
     #
     def deduplicate_masks(self,availableCols: torch.Tensor):
@@ -271,7 +291,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
         n_cols = availableCols.shape[1]
         k = min(k, n_cols)
-        #print(f"Running Beam Search k:{k}, max_beam_width:{max_beam_width}, max_depth:{max_depth}")
+        print(f"Running Beam Search k:{k}, max_beam_width:{max_beam_width}, max_depth:{max_depth}")
         #Check which decisions are still available in at least one sample
         candidate_mask = availableCols.any(dim=0)
         candidate_likelihoods = log_likelihoods[ordered_rows[current_row],:].masked_fill(~candidate_mask, -torch.inf)
@@ -338,15 +358,25 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
     #
     @torch.no_grad()
     def determineRowOrder(self, log_likelihood_matrix: torch.tensor):
-        W = self.computeLinkageMatrix()
-        distance = np.exp(-W.numpy())
+        W = self.computeDistanceMatrix()
+        distance = 1.0/W.numpy()
         #cluster_labels = torch.from_numpy(SpectralClustering(affinity='precomputed',assign_labels='cluster_qr').fit_predict(W))
-        cluster_labels = torch.from_numpy(AgglomerativeClustering(n_clusters=None,metric='precomputed',linkage='single',distance_threshold=0.95).fit_predict(distance))
-        distance = scipy.spatial.distance.squareform(distance, checks=False)
+        model = AgglomerativeClustering(n_clusters=None,metric='precomputed',linkage='single',distance_threshold=0.99).fit(distance)
+        linkage = to_linkage(model)
+        cluster_labels = torch.from_numpy(model.labels_)
         unique_clusters, inverse, counts = torch.unique(cluster_labels, return_counts=True, return_inverse=True)
-        ordered_linkage = linkage(distance, method='single',optimal_ordering=True)
-        ordered_indexes = leaves_list(ordered_linkage)
-        return torch.from_numpy(ordered_indexes), counts[inverse][ordered_indexes]
+        ordered_indexes = leaves_list(linkage)
+        ordered_cluster_labels = cluster_labels[ordered_indexes]
+        max_depths = torch.zeros_like(ordered_cluster_labels)
+        for i,cluster in enumerate(unique_clusters):
+            cluster_mask = ordered_cluster_labels == cluster
+            running_count = cluster_mask.cumsum(dim=-1)
+            running_count[~cluster_mask] = 0
+            running_count[cluster_mask] = counts[i] - running_count[cluster_mask]
+            max_depths += running_count
+        #
+        neighbor_count = (self._distances[ordered_indexes,:] < self._max_predicted_dnm).sum(dim=-1) + 1
+        return torch.from_numpy(ordered_indexes), max_depths, neighbor_count
 
     #
     def _sample(self, sample_shape=torch.Size(), allow_resample=True) -> torch.tensor:
@@ -359,16 +389,18 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         decision_log = torch.full(sample_shape+(self._distances.shape[0],4),-2, dtype=torch.float64)
         decision_counter = 0
         gibbs_sample = False
+        ESS_History = torch.ones((availableRows.shape[1],), dtype=torch.float64)*-1
         if not hasattr(self,'row_order'):
-            self.row_order,self.cluster_count = self.determineRowOrder(self._base_row_decision_likelihoods_unnormalized)
+            row_order,max_depths,neighbor_count= self.determineRowOrder(self._base_row_decision_likelihoods_unnormalized)
+
             #self.cluster_count[...] = 10000
-        for _ in tqdm(enumerate(self.row_order),desc="Matching Rows"):
+        for _ in tqdm(enumerate(row_order),desc="Matching Rows"):
             try:
-                step_weights = self.__getNextInSequence(sample, sample_indexes, self.row_order, self.cluster_count,self.cluster_count, availableCols, decision_log, decision_counter)
+                step_weights = self.__getNextInSequence(sample, sample_indexes, row_order,max_depths,neighbor_count, availableCols, decision_log, decision_counter)
                 sample_weights = sample_weights+step_weights
 
                 if allow_resample:
-                    self._resample(sample, sample_weights, availableRows,availableCols,decision_log,decision_counter)
+                    self._resample(sample, sample_weights, availableRows,availableCols,decision_log,decision_counter,ESS_History)
             except Exception as e:
                 raise SamplingError(f"Error during sampling of matching matrices \n"
                                     f"Step: {decision_counter} of {availableRows.shape[0]} \n"
@@ -379,7 +411,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
             decision_counter += 1
 
-        self._resample(sample, sample_weights, availableRows,availableCols,decision_log,decision_counter,force_resample=True)
+        self._resample(sample, sample_weights, availableRows,availableCols,decision_log,decision_counter,ESS_History,force_resample=True)
         #assert torch.abs(self.log_prob(sample) - partial_log_likelihood.sum()) <= 1
         return sample, sample_indexes, availableRows,availableCols, decision_log, gibbs_sample
 
