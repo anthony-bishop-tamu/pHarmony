@@ -104,7 +104,7 @@ def initalizeAllComponents(distances, dims, max_predicted_dm, max_CSP_count):
                                      torch.tensor([max_predicted_dm],dtype=torch.float64),
                                      torch.tensor([max_CSP_count],dtype=torch.float64))
     csp_distribution = Frechet(csp_distribution.alpha.detach().clone().requires_grad_(True),csp_distribution.scale.detach().clone().requires_grad_(True))
-    csp_distribution=Frechet(torch.tensor([1.1],requires_grad=True),torch.tensor([30.0],requires_grad=True))
+    #csp_distribution=Frechet(torch.tensor([1.1],requires_grad=True),torch.tensor([30.0],requires_grad=True))
 
     non_matching_distribution = UniformDistanceSquared(dim=torch.tensor(dims,dtype=torch.float64),
                                                        Rmax=distances.max(dim=-1)[0])
@@ -287,7 +287,7 @@ def maximization(samples: tuple,
     # optimizer = torch.optim.Adam([csp_assignment_params, csp_distribution_params], lr=1E-3)
     csp_distribution = dist.csp_distribution
     optimizer = torch.optim.Adam([csp_distribution.alpha, csp_distribution.scale], lr=learning_rate)
-    maxIterators = 1000
+    maxIterators = 10000
     prevLoss = torch.finfo(torch.float64).max
     previous_alpha = csp_distribution.alpha.detach().clone()
     previous_scale = csp_distribution.scale.detach().clone()
@@ -447,13 +447,13 @@ def runEM(distances_squared_normalized: torch.tensor,
             0.10)
 #        PEAK_MATCHER_LOGGER.info("CSP distribution convergece")
         PEAK_MATCHER_LOGGER.info(f"CSP_dist: { dist.csp_distribution.alpha}, {dist.csp_distribution.scale }")
-#        csp_dist_converged, csp_dist_mean, csp_dist_max = verifyTensorConvergence(dist.csp_distribution.param,
-#                                                                                  previous_csp_dist_params,
-#                                                                                  0.05,0.05)
+        csp_dist_converged, csp_dist_mean, csp_dist_max = verifyTensorConvergence(torch.cat([dist.csp_distribution.alpha, dist.csp_distribution.scale], dim=0),
+                                                                                  torch.cat([previous_dist.csp_distribution.alpha, previous_dist.csp_distribution.scale], dim=0),
+                                                                                  0.05,0.05)
 
 
 
-        if csp_distribution_converged and i >= minSteps and nonMatching_distribution_converged:
+        if csp_distribution_converged and i >= minSteps and nonMatching_distribution_converged and csp_dist_converged:
             PEAK_MATCHER_LOGGER.info("Converged?: True")
             break
         else:
