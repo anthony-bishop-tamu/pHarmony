@@ -153,7 +153,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         d.zero_()
         mask[C - 1, C - 1] = True
         mask = ~mask.unsqueeze(0)
-        for i in range(0, R):
+        for i in tqdm(range(0, R),desc="Computing MI matrix"):
             temp = log_likelihood_matrix[i, :].unsqueeze(0).unsqueeze(-1) + log_likelihood_matrix.unsqueeze(
                 -2)  # 1,C,1 + R,1,C
             temp.masked_fill_(mask, -torch.inf)
