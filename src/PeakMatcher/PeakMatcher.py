@@ -100,11 +100,11 @@ def initalizeAllComponents(distances, dims, max_predicted_dm, max_CSP_count):
     csp_weights = initial_weights[:,:,1]
     no_matching_weights = initial_weights[:,:,2]
 
-    csp_distribution = RegFrechet(torch.tensor([1],dtype=torch.float64,requires_grad=True),
-                                     torch.tensor([max_predicted_dm],dtype=torch.float64),
-                                     torch.tensor([max_CSP_count],dtype=torch.float64))
-    csp_distribution = Frechet(csp_distribution.alpha.detach().clone().requires_grad_(True),csp_distribution.scale.detach().clone().requires_grad_(True))
-    #csp_distribution=Frechet(torch.tensor([1.1],requires_grad=True),torch.tensor([30.0],requires_grad=True))
+    #csp_distribution = RegFrechet(torch.tensor([1],dtype=torch.float64,requires_grad=True),
+    #                                 torch.tensor([max_predicted_dm],dtype=torch.float64),
+    #                                 torch.tensor([max_CSP_count],dtype=torch.float64))
+    #csp_distribution = Frechet(csp_distribution.alpha.detach().clone().requires_grad_(True),csp_distribution.scale.detach().clone().requires_grad_(True))
+    csp_distribution=Frechet(torch.tensor([2.0],requires_grad=True),torch.tensor([30.0],requires_grad=True))
 
     non_matching_distribution = UniformDistanceSquared(dim=torch.tensor(dims,dtype=torch.float64),
                                                        Rmax=distances.max(dim=-1)[0])
@@ -286,7 +286,7 @@ def maximization(samples: tuple,
     PEAK_MATCHER_LOGGER = logging.getLogger(__name__)
     # optimizer = torch.optim.Adam([csp_assignment_params, csp_distribution_params], lr=1E-3)
     csp_distribution = dist.csp_distribution
-    optimizer = torch.optim.Adam([csp_distribution.alpha, csp_distribution.scale], lr=learning_rate)
+    optimizer = torch.optim.AdamW([csp_distribution.alpha, csp_distribution.scale], lr=learning_rate,weight_decay=1e-2)
     maxIterators = 10000
     prevLoss = torch.finfo(torch.float64).max
     previous_alpha = csp_distribution.alpha.detach().clone()
@@ -317,7 +317,7 @@ def maximization(samples: tuple,
             with torch.no_grad():
                 csp_distribution.alpha[0] = previous_alpha[0]
                 csp_distribution.scale[0] = previous_scale[0]
-            optimizer = torch.optim.Adam([csp_distribution.alpha,csp_distribution.scale], lr=optimizer.param_groups[0]['lr'] * 0.5)
+            optimizer = torch.optim.AdamW([csp_distribution.alpha,csp_distribution.scale], lr=optimizer.param_groups[0]['lr'] * 0.5, weight_decay=1e-2)
 
             PEAK_MATCHER_LOGGER.verbose("Lowering Learning rate")
             continue

@@ -116,16 +116,16 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         #parameter corrected loglikelihoods
 
         final_matching_likelihoods = (torch.stack([unweighted_matching_loglikelihoods,self._loglikelihoodMatrix[:,:,2]],dim=2)
-                                       + self._matching_mixture_weights.detach())
+                                      )#+ self._matching_mixture_weights.detach())
 
         self._matching_likelihood = final_matching_likelihoods[:,:,0]
         self._match_non_matching_loglikelihoods = final_matching_likelihoods[:,:,1]
 
         distributed_missing_mixture_weights = torch.zeros((self._distances.shape[1]+1,))
-        '''#distributed_missing_mixture_weights[:-1] = self._missing_mixture_weights[0].unsqueeze(-1).detach()
-        distributed_missing_mixture_weights[:-1] = (self._missing_mixture_weights[0].unsqueeze(-1).exp().detach() / len(
-            distributed_missing_mixture_weights[:-1])).log()
-        distributed_missing_mixture_weights[-1] = self._missing_mixture_weights.detach()[1]'''
+        #distributed_missing_mixture_weights[:-1] = self._missing_mixture_weights[0].unsqueeze(-1).detach()
+        #distributed_missing_mixture_weights[:-1] = (self._missing_mixture_weights[0].unsqueeze(-1).exp().detach() / len(
+        #    distributed_missing_mixture_weights[:-1])).log()
+        #distributed_missing_mixture_weights[-1] = self._missing_mixture_weights.detach()[1]
 
         self._base_row_decision_likelihoods= torch.zeros((self._distances.shape[0],self._distances.shape[1]+1),dtype=torch.float64)
         self._base_row_decision_likelihoods[:,:] = self._match_non_matching_loglikelihoods.detach().sum(dim=-1).unsqueeze(1)
@@ -187,7 +187,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                                                                  self._base_row_decision_likelihoods_unnormalized,
                                                                  row_order,
                                                                  decision_counter,
-                                                                 k=10,
+                                                                 k=30,
                                                                  max_beam_width=100,
                                                                  max_depth=max(5,max_depths[decision_counter]),)
 
@@ -234,7 +234,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         if decision_counter < ESS_History.shape[0]:
             ESS_History[decision_counter] = ess_ratio
         resample = (ESS_History[min:decision_counter] < 0.5).all()
-        if resample or force_resample:
+        if force_resample:
             print(f"{decision_counter}: ESS ratio:, {ess_ratio:0.3f}; Resample")
             # Step 1: Create systematic positions
             positions = (torch.arange(nsamples, dtype=sample_weights.dtype, device=sample_weights.device) +
@@ -252,7 +252,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
             decision_log[...,...] =decision_log[indices,...]
             return ess/nsamples < 0.25
         else:
-            print(f"{decision_counter}: ESS ratio:, {ess_ratio:0.3f}")
+            #print(f"{decision_counter}: ESS ratio:, {ess_ratio:0.3f}")
             return False
     #
     def deduplicate_masks(self,availableCols: torch.Tensor):
@@ -385,7 +385,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         log_faux_y = log_faux.logsumexp(dim=-2,keepdim=True)
         faux_mi = torch.where(faux.log().isfinite(), faux*(log_faux-log_faux_x-log_faux_y),0).sum()
 
-        threshold = 1.0/faux_mi.item()
+        threshold = 100*1.0/faux_mi.item()
 
         if not hasattr(self,'_mi_matrix'):
             self.compute_mi_matrix(self._base_row_decision_likelihoods_unnormalized)
@@ -429,8 +429,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                 step_weights = self.__getNextInSequence(sample, sample_indexes, row_order,max_depths,neighbor_count, availableCols, decision_log, decision_counter)
                 sample_weights = sample_weights+step_weights
 
-                if max_depths[decision_counter] == 0:
-                    self._resample(sample, sample_weights, availableRows,availableCols,decision_log,decision_counter,ESS_History,force_resample=True)
+                self._resample(sample, sample_weights, availableRows,availableCols,decision_log,decision_counter,ESS_History,force_resample=max_depths[decision_counter] == 0)
             except Exception as e:
                 raise SamplingError(f"Error during sampling of matching matrices \n"
                                     f"Step: {decision_counter} of {availableRows.shape[0]} \n"
