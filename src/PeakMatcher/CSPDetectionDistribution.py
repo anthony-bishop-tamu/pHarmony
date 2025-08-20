@@ -8,7 +8,7 @@ import numpy as np
 from torch.profiler import record_function
 import torch.nn.functional as F
 from sklearn.cluster import SpectralClustering, AgglomerativeClustering
-from scipy.cluster.hierarchy import linkage, dendrogram, leaves_list
+from scipy.cluster.hierarchy import linkage, dendrogram, optimal_leaf_ordering, leaves_list
 import math
 class SamplingError(Exception):
     pass
@@ -87,6 +87,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
         self._calculateDecisionLogLikelihood()
 
+
     #
     def clone(self):
         return CSPDetectionDistribution(self._distances.detach().clone(),
@@ -144,32 +145,13 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         self._base_row_decision_likelihoods_unnormalized = None
 
     @torch.no_grad()
-    def compute_mi_matrix(self, log_likelihood_matrix: torch.tensor) -> torch.Tensor:
-        R, C = log_likelihood_matrix.shape
-        device = log_likelihood_matrix.device
-        mi_matrix = torch.empty((R, R), dtype=torch.float32, device=device)
-        mask = torch.ones((C, C), dtype=torch.bool, device=device)
-        d = mask.diagonal(offset=0, dim1=-2, dim2=-1)
-        d.zero_()
-        mask[C - 1, C - 1] = True
-        mask = ~mask.unsqueeze(0)
-        for i in tqdm(range(0, R),desc="Computing MI matrix"):
-            temp = log_likelihood_matrix[i, :].unsqueeze(0).unsqueeze(-1) + log_likelihood_matrix.unsqueeze(
-                -2)  # 1,C,1 + R,1,C
-            temp.masked_fill_(mask, -torch.inf)
-            temp = temp - temp.logsumexp(dim=(-1, -2), keepdim=True)
-            temp_log_x = temp.logsumexp(dim=-1, keepdim=True)
-            temp_log_y = temp.logsumexp(dim=-2, keepdim=True)
-            mi = temp.exp() * (temp - (temp_log_x + temp_log_y))
-            mi.masked_fill_(temp.exp() == 0, 0)
-            cross_entropy = -temp.exp() * temp
-            cross_entropy.masked_fill_(temp.exp() == 0, 0)
-            mi_matrix[i, :] = mi.sum(dim=(-1, -2))
-            mi_matrix[i, i] = cross_entropy[i].sum(dim=(-1, -2))
-        #
-        self._mi_matrix = mi_matrix
-        min = torch.min(mi_matrix[mi_matrix > 0])
-        self._mi_matrix.clamp_(min=min/2)
+    def compute_linkage_matrix(self, log_likelihood_matrix: torch.tensor) -> torch.Tensor:
+        candidate_cols = log_likelihood_matrix[:,:-1] > (log_likelihood_matrix[:,-1] - math.log(10)).unsqueeze(-1)
+        self._linkage_matrix = (candidate_cols.unsqueeze(1) & candidate_cols.unsqueeze(0)).sum(dim=-1).type(torch.float32)
+        self._linkage_matrix.clamp_(min=0.5)
+        return self._linkage_matrix
+
+
 
     def __getNextInSequence(self,
                                              sample: torch.tensor,
@@ -250,10 +232,10 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
             availableRows[...,:] =availableRows[indices,:]
             availableCols[...,:] =availableCols[indices,:]
             decision_log[...,...] =decision_log[indices,...]
-            return ess/nsamples < 0.25
+            return
         else:
-            #print(f"{decision_counter}: ESS ratio:, {ess_ratio:0.3f}")
-            return False
+            print(f"{decision_counter}: ESS ratio:, {ess_ratio:0.3f}")
+            return
     #
     def deduplicate_masks(self,availableCols: torch.Tensor):
         unique_masks, inverse = torch.unique(availableCols, dim=0, return_inverse=True)
@@ -344,8 +326,6 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         final_row = min(current_row + max_depth+1, len(ordered_rows))
         current_beam_width = 1
         for i in range(current_row+1,final_row):
-            running_probability = future_logsumexps.logsumexp(dim=-1).clone()
-            running_probability = (running_probability - running_probability.logsumexp(dim=-1,keepdim=True)).exp()
             active_future_logsumexps = future_logsumexps[:,:,:current_beam_width]
 
             top_cols = torch.where(future_availableCols[:,:,:current_beam_width,:],
@@ -368,7 +348,10 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
             future_availableCols[unique_sample_indexes,k_indexes,proposed_beam_indexes,:] = future_availableCols[unique_sample_indexes,k_indexes,originating_beam_idx,:]
             future_availableCols[unique_sample_indexes,k_indexes,proposed_beam_indexes,col_idx] = False
             future_availableCols[:,:,:,-1] = True
+            running_probability = future_logsumexps.logsumexp(dim=-1).clone()
+            running_probability = (running_probability - running_probability.logsumexp(dim=-1,keepdim=True)).exp()
             current_beam_width = proposed_beam_width
+
         #
         future_logsumexps = future_logsumexps.logsumexp(dim=-1)
 
@@ -376,26 +359,18 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
     #
     @torch.no_grad()
     def determineRowOrder(self, log_likelihood_matrix: torch.tensor):
-        faux = torch.ones_like(log_likelihood_matrix)
-        d = faux.diagonal(dim1=-1, dim2=-2)
-        d[:-1] = 0
-        faux /= faux.sum()
-        log_faux = faux.log()
-        log_faux_x = log_faux.logsumexp(dim=-1,keepdim=True)
-        log_faux_y = log_faux.logsumexp(dim=-2,keepdim=True)
-        faux_mi = torch.where(faux.log().isfinite(), faux*(log_faux-log_faux_x-log_faux_y),0).sum()
 
-        threshold = 100*1.0/faux_mi.item()
-
-        if not hasattr(self,'_mi_matrix'):
-            self.compute_mi_matrix(self._base_row_decision_likelihoods_unnormalized)
-        distance = 1.0/self._mi_matrix.numpy()
+        self.compute_linkage_matrix(self._base_row_decision_likelihoods_unnormalized)
+        distance = 1.0/self._linkage_matrix
+        d = distance.diagonal(dim1=-2, dim2=-1)
+        d[...] = 0
+        distance = distance.numpy()
         #cluster_labels = torch.from_numpy(SpectralClustering(affinity='precomputed',assign_labels='cluster_qr').fit_predict(W))
-        model = AgglomerativeClustering(n_clusters=None,metric='precomputed',linkage='single',distance_threshold=threshold).fit(distance)
+        model = AgglomerativeClustering(n_clusters=None,metric='precomputed',linkage='single',distance_threshold=1.01).fit(distance)
         linkage = to_linkage(model)
         cluster_labels = torch.from_numpy(model.labels_)
         unique_clusters, inverse, counts = torch.unique(cluster_labels, return_counts=True, return_inverse=True)
-        ordered_indexes = leaves_list(linkage)
+        ordered_indexes = leaves_list(optimal_leaf_ordering(linkage,scipy.spatial.distance.squareform(distance)))
         ordered_cluster_labels = cluster_labels[ordered_indexes]
         max_depths = torch.zeros_like(ordered_cluster_labels)
         for i,cluster in enumerate(unique_clusters):
