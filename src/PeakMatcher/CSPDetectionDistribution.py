@@ -117,7 +117,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         #parameter corrected loglikelihoods
 
         final_matching_likelihoods = (torch.stack([unweighted_matching_loglikelihoods,self._loglikelihoodMatrix[:,:,2]],dim=2)
-                                      )#+ self._matching_mixture_weights.detach())
+                                      + self._matching_mixture_weights.detach())
 
         self._matching_likelihood = final_matching_likelihoods[:,:,0]
         self._match_non_matching_loglikelihoods = final_matching_likelihoods[:,:,1]
@@ -173,13 +173,13 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                                                                  max_beam_width=100,
                                                                  max_depth=max(5,max_depths[decision_counter]),)
 
-        log_probabilities.masked_fill_(~availableCols[:,top_k_indicies],-torch.inf)
+        #log_probabilities.masked_fill_(~availableCols[:,top_k_indicies],-torch.inf)
         log_probabilities -= log_probabilities.logsumexp(dim=-1,keepdim=True)
 
 
         with record_function("Column_Sampling"):
             unmapped_matched_columns = torch.multinomial(log_probabilities.exp(), 1, replacement=True).type(torch.int32).squeeze()
-            matched_columns = top_k_indicies[unmapped_matched_columns].type(torch.int32)
+            matched_columns = top_k_indicies[sample_indicies,unmapped_matched_columns].type(torch.int32)
             no_matched_columns = matched_columns >= self._base_row_decision_likelihoods_unnormalized.shape[1] -1
 
         # availableRows[sample_indicies, sampled_rows] = False
@@ -293,11 +293,11 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         k = min(k, n_cols)
 
         #Check which decisions are still available in at least one sample
-        candidate_mask = availableCols.any(dim=0)
-        candidate_likelihoods = log_likelihoods[ordered_rows[current_row],:].masked_fill(~candidate_mask, -torch.inf)
+        unique_availableCols, reverse_index = torch.unique(availableCols,return_inverse=True,dim=0)
+        candidate_likelihoods = log_likelihoods[ordered_rows[current_row],:].masked_fill(~unique_availableCols, -torch.inf)
         #Select top k indicies
         top_k_likelihoods, top_k_col_indexes = torch.topk(candidate_likelihoods, k=k, dim=-1)
-        _, reverse_index, _ , unique_availableCols = self.unique_rows_by_bits(availableCols, top_k_col_indexes)
+
         #unique_availableCols, reverse_index = torch.unique(availableCols[:,top_k_col_indexes], dim=0, return_inverse=True)
 
 
@@ -315,14 +315,16 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         #column_indexes = torch.arange(n_cols).unsqueeze(-1).unsqueeze(0)
         k_indexes = torch.arange(k).unsqueeze(-1).unsqueeze(0)
 
+        top_k_col_indexes.unsqueeze_(1)
+        top_k_likelihoods.unsqueeze_(1)
 
         #return future_logsumexps[reverse_index, ...].sum(dim=-1), top_k_col_indexes
 
         #Mask out each current decision
-        future_availableCols[:, torch.arange(k), top_k_col_indexes] = False
+        future_availableCols[unique_sample_indexes.squeeze(-1), torch.arange(k).unsqueeze(0), top_k_col_indexes] = False
         future_availableCols[:, :, n_cols - 1] = True
         future_availableCols = future_availableCols.unsqueeze(-2).expand(-1, -1, max_beam_width, -1).clone()
-        future_logsumexps[:,k_indexes.squeeze(),:] = top_k_likelihoods.unsqueeze(-1).unsqueeze(0).type_as(future_logsumexps)
+        future_logsumexps[unique_sample_indexes.squeeze(-1),k_indexes.squeeze().unsqueeze(0),:] = top_k_likelihoods.squeeze().unsqueeze(-1).type(torch.float)
         final_row = min(current_row + max_depth+1, len(ordered_rows))
         current_beam_width = 1
         for i in range(current_row+1,final_row):
@@ -355,7 +357,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         #
         future_logsumexps = future_logsumexps.logsumexp(dim=-1)
 
-        return future_logsumexps[reverse_index,...], top_k_col_indexes
+        return future_logsumexps[reverse_index,...], top_k_col_indexes.squeeze(1)[reverse_index,...]
     #
     @torch.no_grad()
     def determineRowOrder(self, log_likelihood_matrix: torch.tensor):
