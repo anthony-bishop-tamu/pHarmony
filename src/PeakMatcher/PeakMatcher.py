@@ -107,7 +107,7 @@ def initalizeAllComponents(distances, dims, max_predicted_dm, max_CSP_count):
     csp_distribution=Frechet(torch.tensor([1.0],requires_grad=True),torch.tensor([60.0],requires_grad=True))
 
     non_matching_distribution = UniformDistanceSquared(dim=torch.tensor(dims,dtype=torch.float64),
-                                                       Rmax=distances.max(dim=-1)[0])
+                                                       Rmax=(distances.max()/2).expand(distances.shape[0]))
 
     #non_matching_distribution = torch.distributions.Uniform(0,distances.max()+0.005)
 
