@@ -621,7 +621,7 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
           max_predicted_dnm,
           initial_csp_distribution,
           initial_non_matching_distribution,
-          learning_rate=0.5,
+          learning_rate=1E-2,
           gradient_convergence=gradient_convergence)
         if offset.requires_grad:
              previous_offset = offset.detach().clone()

@@ -144,19 +144,39 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         self._base_row_decision_likelihoods = None
         self._base_row_decision_likelihoods_unnormalized = None
 
+    def shortest_hops_floyd(self,adj: torch.Tensor, undirected: bool = True) -> torch.Tensor:
+        """
+        adj: (N,N) 0/1 (or bool) adjacency matrix.
+        Returns (N,N) distances in hops; +inf if no path.
+        """
+        assert adj.ndim == 2 and adj.shape[0] == adj.shape[1], "adj must be square"
+        N = adj.shape[0]
+        A = (adj != 0)
+        if undirected:
+            A = A | A.t()
+
+        # init distances: 1 for edges, 0 on diag, +inf otherwise
+        dist = torch.full((N, N), float('inf'), dtype=torch.float32, device=adj.device)
+        dist[A] = 1.0
+        dist.fill_diagonal_(0.0)
+
+        # Floyd–Warshall (min-plus)
+        for k in range(N):
+            dist = torch.minimum(dist, dist[:, k:k + 1] + dist[k:k + 1, :])
+        return dist
     @torch.no_grad()
     def compute_linkage_matrix(self, log_likelihood_matrix: torch.tensor) -> torch.Tensor:
         self._candidate_indicies = []
-        candidate_cols = log_likelihood_matrix[:,:-1] > (log_likelihood_matrix[:,-1] - math.log(10)).unsqueeze(-1)
+        candidate_cols = log_likelihood_matrix[:,:-1] > (log_likelihood_matrix[:,-1]).unsqueeze(-1)
         log_likelihood_matrix = log_likelihood_matrix[:,:-1].masked_fill(candidate_cols,-torch.inf)
-        probs = log_likelihood_matrix.softmax(dim=-1)
-        self._linkage_matrix = (probs.unsqueeze(1) * probs.unsqueeze(0)).sum(dim=-1).type(torch.float32)
-        self._linkage_matrix.clamp_(min=1E-10)
+        self._linkage_matrix = (candidate_cols.unsqueeze(1) & candidate_cols.unsqueeze(0)).any(dim=-1)
+        self._linkage_matrix.fill_diagonal_(1)
         for row in range(candidate_cols.shape[0]):
             candidates = torch.cat([torch.nonzero(candidate_cols[row].squeeze(),as_tuple=False).reshape(-1),
                                     torch.tensor([log_likelihood_matrix.shape[1]]).reshape(-1)],dim=0)
             self._candidate_indicies.append(torch.atleast_1d(candidates))
-        return self._linkage_matrix,
+        distance_matrix = self.shortest_hops_floyd(self._linkage_matrix, undirected=True)
+        return distance_matrix
 
 
 
@@ -368,13 +388,11 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
     @torch.no_grad()
     def determineRowOrder(self, log_likelihood_matrix: torch.tensor):
 
-        self.compute_linkage_matrix(self._base_row_decision_likelihoods_unnormalized)
-        distance = 1.0/self._linkage_matrix
-        d = distance.diagonal(dim1=-2, dim2=-1)
-        d[...] = 0
-        distance = distance.numpy()
+        distance = self.compute_linkage_matrix(self._base_row_decision_likelihoods_unnormalized).numpy()
+        threshold = np.max(distance[distance < float('inf')])
+        distance[distance == float('inf')] = threshold+1
         #cluster_labels = torch.from_numpy(SpectralClustering(affinity='precomputed',assign_labels='cluster_qr').fit_predict(W))
-        model = AgglomerativeClustering(n_clusters=None,metric='precomputed',linkage='single',distance_threshold=200).fit(distance)
+        model = AgglomerativeClustering(n_clusters=None,metric='precomputed',linkage='single',distance_threshold=min(3,threshold)).fit(distance)
         linkage = to_linkage(model)
         cluster_labels = torch.from_numpy(model.labels_)
         unique_clusters, inverse, counts = torch.unique(cluster_labels, return_counts=True, return_inverse=True)
