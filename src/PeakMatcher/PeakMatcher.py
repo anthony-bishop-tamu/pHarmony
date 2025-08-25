@@ -586,7 +586,7 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
     #build priors
     no_csp_std = expected_fraction_csp  # Std deviation is arbitrarily set to being the same as the expected fraction csp
 
-    csp_mixture_priors = calculateBetaParametersFromMeanAndVariance(mean=expected_fraction_csp,
+    csp_mixture_priors = calculateBetaParametersFromMeanAndVariance(mean=1.0-expected_fraction_csp,
                                                                     variance=variance_scale_fraction_csp * no_csp_std ** 2)  # [no csp, csp ] (Given a match!)
 
     expected_missing_ratio = expected_fraction_missing
@@ -614,7 +614,7 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
 
     initial_missing_mixture_weights = missing_mixture_priors.log().detach().clone()
     initial_matching_mixture_weights = matching_mixture_weights.detach().clone()
-    initial_csp_mixture_weights = csp_mixture_weights.detach().clone()
+    initial_csp_mixture_weights = csp_mixture_priors.log().detach().clone()
     initial_csp_distribution = csp_distribution
     initial_non_matching_distribution = non_matching_distribution
 
