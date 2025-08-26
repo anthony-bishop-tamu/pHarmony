@@ -7,7 +7,7 @@ import logging
 
 data_directory =  importlib_resources.files('Tests.TestData')
 
-#case1
+'''#case1
 reference_list = data_directory/'case1'/'IL1B_FragmentScreen_Reference_1.list'
 target_list = data_directory/'case1'/'IL1B_FragmentScreen_Fragment_232.list'
 output_directory = data_directory/'case1'/"test_output"
@@ -34,4 +34,20 @@ standalone_match_peaks(reference_list,['w1','w2'], [0.03,0.003],
                         0.1,2.0,
                         0.1,
                         1E-5,
-                        False,False,0.9, [0.101,1], log_level=20,log_file=True)
+                        False,False,0.9, [0.101,1], log_level=20,log_file=True)'''
+
+
+
+#case4
+reference_list = data_directory/'case4'/'wmt010_20230315_scfv_4420_wFlu_hnco.list'
+target_list =  data_directory/'case4'/'wmt010_20230315_scfv_4420_wFlu_hncaco.list'
+output_directory = data_directory/'case4'/"test_output"
+
+standalone_match_peaks(reference_list,['w1','w2','w3'], [0.15,0.015,0.0015],
+                        target_list,['w1','w2','w3'], [ 0.15, 0.015,0.0015],
+                        output_directory,
+                        0.0001,1,
+                        0.01,2.0,
+                        0.1,
+                        1E-5,
+                        False,False,0.9, [0.23,0.101,1], log_level=20,log_file=True)

@@ -95,14 +95,13 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         row_decision_matrix = self._base_row_decision_probabilities.detach()
 
         #row_log_evidence[...] = 0
-        alpha = 0
-        row_log_evidence_alpha = row_log_evidence*alpha
+        #alpha = 0
+        #row_log_evidence_alpha = row_log_evidence*alpha
 
         #prob_tensor = availableRows.type(torch.float64)
         #row_index_list = torch.nonzero(availableRows.type(torch.float64), as_tuple=True)[1].reshape(sample.shape[0],-1)
         with record_function("Row_Sampling"):
-            row_log_evidence_alpha[~availableRows] = -torch.inf
-            row_probs = (row_log_evidence_alpha - row_log_evidence_alpha.logsumexp(dim=-1,keepdim=True)).exp()
+            row_probs = availableRows.type(torch.float64)
             sampled_rows = torch.multinomial(row_probs,num_samples=1,replacement=True).type(torch.int32).squeeze(1)
             #print(sampled_rows.unique().shape)
             #sampled_rows = row_index_list[torch.arange(sample.shape[0]),sampled_rows]
