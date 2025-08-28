@@ -146,38 +146,56 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         self._base_row_decision_likelihoods = None
         self._base_row_decision_likelihoods_unnormalized = None
 
-    def shortest_hops_floyd(self,adj: torch.Tensor, undirected: bool = True) -> torch.Tensor:
+    def shortest_paths_floyd(self, D: torch.Tensor, undirected: bool = True) -> torch.Tensor:
         """
-        adj: (N,N) 0/1 (or bool) adjacency matrix.
-        Returns (N,N) distances in hops; +inf if no path.
-        """
-        assert adj.ndim == 2 and adj.shape[0] == adj.shape[1], "adj must be square"
-        N = adj.shape[0]
-        A = (adj != 0)
-        if undirected:
-            A = A | A.t()
+        All-pairs shortest paths (Floyd–Warshall) on a weighted graph.
 
-        # init distances: 1 for edges, 0 on diag, +inf otherwise
-        dist = torch.full((N, N), float('inf'), dtype=torch.float32, device=adj.device)
-        dist[A] = 1.0
+        Args:
+            D: (N, N) tensor of edge weights where D[i, j] is the distance of the
+               direct edge i->j. Use +inf where there is no direct edge.
+            undirected: If True, treat the graph as undirected by taking
+               min(D, D.T) before running the algorithm.
+
+        Returns:
+            (N, N) tensor of shortest-path distances. +inf means no route exists.
+        """
+        assert D.ndim == 2 and D.shape[0] == D.shape[1], "D must be square"
+        N = D.shape[0]
+        dtype = D.dtype if D.is_floating_point() else torch.float32
+
+        # Work on a copy, ensure floating dtype
+        dist = D.to(dtype=dtype).clone()
+
+        # If undirected, keep the shorter of i->j and j->i
+        if undirected:
+            dist = torch.minimum(dist, dist.t())
+
+        # Zero on the diagonal (distance from a node to itself)
         dist.fill_diagonal_(0.0)
 
-        # Floyd–Warshall (min-plus)
+        # Floyd–Warshall relaxation: dist[i,j] = min(dist[i,j], dist[i,k] + dist[k,j])
+        # Use a temporary candidate matrix to avoid aliasing issues during in-place minimum.
         for k in range(N):
-            dist = torch.minimum(dist, dist[:, k:k + 1] + dist[k:k + 1, :])
+            cand = dist[:, k:k + 1] + dist[k:k + 1, :]
+            torch.minimum(dist, cand, out=dist)
+
         return dist
     @torch.no_grad()
     def compute_linkage_matrix(self, log_likelihood_matrix: torch.tensor) -> torch.Tensor:
         self._candidate_indicies = []
-        candidate_cols = log_likelihood_matrix[:,:-1] > (log_likelihood_matrix[:,-1]).unsqueeze(-1) - math.log(10)
+        candidate_cols = log_likelihood_matrix[:,:-1] > (log_likelihood_matrix[:,-1].unsqueeze(-1) - math.log(10))
+        candidate_cols = candidate_cols & ((log_likelihood_matrix.softmax(dim=-1) - log_likelihood_matrix.softmax(dim=-1).max(dim=0, keepdim=True)[0]) > -math.log(10))[:,:-1]
+
         log_likelihood_matrix = log_likelihood_matrix[:,:-1].masked_fill(candidate_cols,-torch.inf)
-        self._linkage_matrix = (candidate_cols.unsqueeze(1) & candidate_cols.unsqueeze(0)).any(dim=-1)
-        self._linkage_matrix.fill_diagonal_(1)
+        self._linkage_matrix = 1.0/(candidate_cols.unsqueeze(1) & candidate_cols.unsqueeze(0)).sum(dim=-1)
+
+
+        #self._linkage_matrix.fill_diagonal_(1)
         for row in range(candidate_cols.shape[0]):
             candidates = torch.cat([torch.nonzero(candidate_cols[row].squeeze(),as_tuple=False).reshape(-1),
                                     torch.tensor([log_likelihood_matrix.shape[1]]).reshape(-1)],dim=0)
             self._candidate_indicies.append(torch.atleast_1d(candidates))
-        distance_matrix = self.shortest_hops_floyd(self._linkage_matrix, undirected=True)
+        distance_matrix = self.shortest_paths_floyd(self._linkage_matrix, undirected=True)
         return distance_matrix
 
 
