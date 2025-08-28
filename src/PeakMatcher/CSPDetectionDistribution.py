@@ -113,7 +113,9 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         unnormalized_csp_posterior_probabilities = self._loglikelihoodMatrix[:,:,0:2].detach() + self._csp_mixture_weights.detach()
         self._csp_posterior_probabilities = unnormalized_csp_posterior_probabilities - unnormalized_csp_posterior_probabilities.logsumexp(dim=-1,keepdim=True)
 
-        unweighted_matching_loglikelihoods = (self._loglikelihoodMatrix[:,:,0:2] + self._csp_mixture_weights.detach()).logsumexp(dim=-1)
+        #unweighted_matching_loglikelihoods = (self._loglikelihoodMatrix[:,:,0:2] + self._csp_mixture_weights.detach()).logsumexp(dim=-1)
+        unweighted_matching_loglikelihoods = (
+                    self._loglikelihoodMatrix[:, :, 0:2]).logsumexp(dim=-1)
         #parameter corrected loglikelihoods
 
         final_matching_likelihoods = (torch.stack([unweighted_matching_loglikelihoods,self._loglikelihoodMatrix[:,:,2]],dim=2)
@@ -167,7 +169,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
     @torch.no_grad()
     def compute_linkage_matrix(self, log_likelihood_matrix: torch.tensor) -> torch.Tensor:
         self._candidate_indicies = []
-        candidate_cols = log_likelihood_matrix[:,:-1] > (log_likelihood_matrix[:,-1]).unsqueeze(-1)
+        candidate_cols = log_likelihood_matrix[:,:-1] > (log_likelihood_matrix[:,-1]).unsqueeze(-1) - math.log(10)
         log_likelihood_matrix = log_likelihood_matrix[:,:-1].masked_fill(candidate_cols,-torch.inf)
         self._linkage_matrix = (candidate_cols.unsqueeze(1) & candidate_cols.unsqueeze(0)).any(dim=-1)
         self._linkage_matrix.fill_diagonal_(1)

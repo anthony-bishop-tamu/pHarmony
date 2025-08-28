@@ -100,14 +100,14 @@ def initalizeAllComponents(distances, dims, max_predicted_dm, max_CSP_count):
     csp_weights = initial_weights[:,:,1]
     no_matching_weights = initial_weights[:,:,2]
 
-    #csp_distribution = RegFrechet(torch.tensor([1],dtype=torch.float64,requires_grad=True),
-    #                                 torch.tensor([max_predicted_dm],dtype=torch.float64),
-    #                                 torch.tensor([max_CSP_count],dtype=torch.float64))
-    #csp_distribution = Frechet(csp_distribution.alpha.detach().clone().requires_grad_(True),csp_distribution.scale.detach().clone().requires_grad_(True))
-    csp_distribution=Frechet(torch.tensor([1.0],requires_grad=True),torch.tensor([60.0],requires_grad=True))
+    csp_distribution = RegFrechet(torch.tensor([1],dtype=torch.float64,requires_grad=True),
+                                     torch.tensor([max_predicted_dm],dtype=torch.float64),
+                                     torch.tensor([max_CSP_count],dtype=torch.float64))
+    csp_distribution = Frechet(csp_distribution.alpha.detach().clone().requires_grad_(True),csp_distribution.scale.detach().clone().requires_grad_(True))
+    #csp_distribution=Frechet(torch.tensor([1.0],requires_grad=True),torch.tensor([100.0],requires_grad=True))
 
     non_matching_distribution = UniformDistanceSquared(dim=torch.tensor(dims,dtype=torch.float64),
-                                                       Rmax=(distances.max()/2).expand(distances.shape[0]))
+                                                       Rmax=(distances.max()).expand(distances.shape[0]))
 
     #non_matching_distribution = torch.distributions.Uniform(0,distances.max()+0.005)
 
@@ -322,7 +322,7 @@ def maximization(samples: tuple,
             PEAK_MATCHER_LOGGER.verbose("Lowering Learning rate")
             continue
         elif prevLoss - loss.item() < 1e-7 and (
-                torch.abs(torch.tensor([csp_distribution.alpha.grad])) < gradient_convergence).all():
+                torch.abs(torch.tensor([csp_distribution.alpha.grad,csp_distribution.scale.grad])) < gradient_convergence).all():
             break
         #csp_distribution = RegFrechet(csp_distribution.alpha, csp_distribution.max_val, csp_distribution.n)
         # csp_distribution = Frechet(csp_distribution.alpha,csp_distribution.scale)
@@ -347,7 +347,7 @@ def runEMStep(distances: torch.tensor,
         #expectation step
         samples = determineSampleSize(sampleSize,dist)
         positionProbs = calculatePositionProb(samples, distances.shape).detach()
-
+        return samples, dist
         # Calculate new mixture weights
         csp_mixture_weights, matching_mixture_weights,missing_mixture_weights = calculateMixtureWeights(dist.csp_posterior_probabilities,positionProbs,
                                                                                                         csp_mixture_priors,matching_mixture_priors,missing_mixture_priors)
@@ -433,7 +433,6 @@ def runEM(distances_squared_normalized: torch.tensor,
         sampleSize = len(samples)
 
         matching_probs = calculatePositionProb(samples, distances_squared_normalized.shape).detach()
-
         PEAK_MATCHER_LOGGER.info("CSP posterior convergence")
         csp_distribution_converged, csp_mean, csp_max = verifyTensorConvergence(dist.csp_posterior_probabilities.exp()[:,:,1]*matching_probs,
                                                                                 previous_dist.csp_posterior_probabilities.exp()[:,:,1]*matching_probs,
@@ -452,8 +451,8 @@ def runEM(distances_squared_normalized: torch.tensor,
                                                                                   0.05,0.05)
 
 
-
-        if csp_distribution_converged and i >= minSteps and nonMatching_distribution_converged and csp_dist_converged:
+        break
+        if csp_distribution_converged and i >= minSteps and nonMatching_distribution_converged:
             PEAK_MATCHER_LOGGER.info("Converged?: True")
             break
         else:
@@ -574,7 +573,7 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
     #build priors
     no_csp_std = expected_fraction_csp  # Std deviation is arbitrarily set to being the same as the expected fraction csp
 
-    csp_mixture_priors = calculateBetaParametersFromMeanAndVariance(mean=expected_fraction_csp,
+    csp_mixture_priors = calculateBetaParametersFromMeanAndVariance(mean=1.0-expected_fraction_csp,
                                                                     variance=variance_scale_fraction_csp * no_csp_std ** 2)  # [no csp, csp ] (Given a match!)
 
     expected_missing_ratio = expected_fraction_missing
@@ -584,8 +583,8 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
                                                                          variance=variance_scale_fraction_missing * match_std ** 2)  # [matching, nonmatching)
     fraction_possible_matched_rows = min(1,float(distances_squared_normalized.shape[1])/distances_squared_normalized.shape[0])
     max_fraction_missing_rows = 1 - fraction_possible_matched_rows
-    expected_fraction_missing_rows =  max(expected_fraction_missing,1-(1-max_fraction_missing_rows)*(1-expected_fraction_missing))
-    #expected_fraction_missing_rows = expected_fraction_missing
+    #expected_fraction_missing_rows =  max(expected_fraction_missing,1-(1-max_fraction_missing_rows)*(1-expected_fraction_missing))
+    expected_fraction_missing_rows = expected_fraction_missing
     PEAK_MATCHER_LOGGER.info(
         f"fraction_possilbe_matched_rows: {fraction_possible_matched_rows}, expected_fraction_missing_rows: {expected_fraction_missing_rows}, expected_fraction_missing: {expected_fraction_missing}")
     missing_mixture_priors = calculateBetaParametersFromMeanAndVariance(mean=1.0 - expected_fraction_missing_rows,
@@ -593,11 +592,11 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
     PEAK_MATCHER_LOGGER.info(f" MissingMixture_priors: {missing_mixture_priors}")
 
 
-    max_fraction_csp = scipy.stats.beta.ppf(0.95,csp_mixture_priors[0],csp_mixture_priors[1])
-    max_CSP_count=(1-expected_fraction_missing_rows)*distances_squared_normalized.shape[0]*max_fraction_csp
+    expected_fraction_csp = scipy.stats.beta.ppf(0.05,csp_mixture_priors[1],csp_mixture_priors[0])
+    expected_CSP_count=(1-expected_fraction_missing_rows)*distances_squared_normalized.shape[0]*expected_fraction_csp
     csp_distribution, non_matching_distribution, csp_mixture_weights, matching_mixture_weights = initalizeAllComponents(
-        distances_squared_normalized.detach(), dims, max_predicted_dnm, max_CSP_count=max_CSP_count)
-    PEAK_MATCHER_LOGGER.info(f"max_predicted_dnm: {max_predicted_dnm}, Max expected CSPs{max_CSP_count}")
+        distances_squared_normalized.detach(), dims, max_predicted_dnm, max_CSP_count=expected_CSP_count)
+    PEAK_MATCHER_LOGGER.info(f"max_predicted_dnm: {max_predicted_dnm}, expected CSP count{expected_CSP_count}")
 
 
     initial_missing_mixture_weights = missing_mixture_priors.log().detach().clone()
