@@ -110,7 +110,13 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         assert not self._loglikelihoodMatrix[:, :,  1].isnan().any()
         assert not self._loglikelihoodMatrix[:, :, 2].isnan().any()
 
+        max_csp = torch.tensor([self._max_predicted_dnm])
+        differential = torch.cat([self._no_csp_distribution.log_prob(max_csp), self._csp_distribution.log_prob(max_csp)]) + self._csp_mixture_weights
+        differential = differential.logsumexp(dim=0).detach()
+        differential = torch.cat([torch.atleast_1d(differential),self._non_matching_distribution.log_prob(max_csp)[0].detach()]) + self._matching_mixture_weights
+        differential = differential[0]-differential[1]
         unnormalized_csp_posterior_probabilities = self._loglikelihoodMatrix[:,:,0:2].detach() + self._csp_mixture_weights.detach()
+
         self._csp_posterior_probabilities = unnormalized_csp_posterior_probabilities - unnormalized_csp_posterior_probabilities.logsumexp(dim=-1,keepdim=True)
 
         #unweighted_matching_loglikelihoods = (self._loglikelihoodMatrix[:,:,0:2] + self._csp_mixture_weights.detach()).logsumexp(dim=-1)
@@ -122,7 +128,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                                       + self._matching_mixture_weights.detach())
 
         self._matching_likelihood = final_matching_likelihoods[:,:,0]
-        self._match_non_matching_loglikelihoods = final_matching_likelihoods[:,:,1]
+        self._match_non_matching_loglikelihoods = final_matching_likelihoods[:,:,1] + differential
 
         distributed_missing_mixture_weights = torch.zeros((self._distances.shape[1]+1,))
         #distributed_missing_mixture_weights[:-1] = self._missing_mixture_weights[0].unsqueeze(-1).detach()
@@ -180,20 +186,67 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
             torch.minimum(dist, cand, out=dist)
 
         return dist
+
+    def top_mass_mask_from_logits(self,logits: torch.Tensor, mass: float = 0.99) -> torch.Tensor:
+        """
+        logits: (m, n) tensor of unnormalized log-probs
+        mass:   target cumulative probability mass (e.g., 0.99)
+
+        returns: (m, n) boolean mask picking the minimal set of top entries per row
+                 whose probabilities sum to at least `mass`.
+        """
+        # 1) Convert logits -> probs row-wise
+        probs = torch.softmax(logits, dim=1)  # (m, n)
+
+        # 2) Sort probs descending per row, keep indices
+        probs_sorted, idx = probs.sort(dim=1, descending=True)  # (m, n), (m, n)
+
+        # 3) Row-wise cumulative sums
+        cdf = probs_sorted.cumsum(dim=1)  # (m, n)
+
+        # 4) First index where cum. mass crosses `mass`
+        #    (guaranteed to exist since last elem sums to ~1)
+        cutoff = (cdf >= mass).to(probs.dtype).argmax(dim=1)  # (m,)
+
+        # 5) Build a mask in sorted space: True for positions <= cutoff
+        n = logits.size(1)
+        arange = torch.arange(n, device=logits.device).unsqueeze(0).expand_as(probs_sorted)
+        mask_sorted = arange <= cutoff.unsqueeze(1)  # (m, n) bool
+
+        # 6) Scatter mask back to original column order
+        mask = torch.zeros_like(probs, dtype=torch.bool).scatter(1, idx, mask_sorted)
+
+        return mask
     @torch.no_grad()
     def compute_linkage_matrix(self, log_likelihood_matrix: torch.tensor) -> torch.Tensor:
         self._candidate_indicies = []
-        candidate_cols = log_likelihood_matrix[:,:-1] > (log_likelihood_matrix[:,-1].unsqueeze(-1) - math.log(10))
-        candidate_cols = candidate_cols & ((log_likelihood_matrix.softmax(dim=-1) - log_likelihood_matrix.softmax(dim=-1).max(dim=0, keepdim=True)[0]) > -math.log(10))[:,:-1]
+        candidate_cols = log_likelihood_matrix[:,:-1] > (log_likelihood_matrix[:,-1].unsqueeze(-1))
+        #candidate_cols = candidate_cols & self.top_mass_mask_from_logits(log_likelihood_matrix, mass=0.99)[:,:-1]
+        mat = log_likelihood_matrix[:,:-1].masked_fill(~candidate_cols, float('-inf'))
+        vals, indexes = torch.topk(mat,k=10,dim=-1)
+        c = torch.zeros_like(candidate_cols)
+        c[torch.arange(log_likelihood_matrix.shape[0]).unsqueeze(-1),indexes] = True
+        candidate_cols = candidate_cols & c
 
-        log_likelihood_matrix = log_likelihood_matrix[:,:-1].masked_fill(candidate_cols,-torch.inf)
-        self._linkage_matrix = 1.0/(candidate_cols.unsqueeze(1) & candidate_cols.unsqueeze(0)).sum(dim=-1)
+
+        collisions = candidate_cols.unsqueeze(1) & candidate_cols.unsqueeze(0)
+
+        self._linkage_matrix = 1.0/(collisions).sum(dim=-1)
+
+        matches_only = log_likelihood_matrix.softmax(dim=-1)[:,:-1].log()
+
+        enhanced_collisions = collisions &  (torch.abs(matches_only.unsqueeze(-2) - matches_only.unsqueeze(0)) - abs(math.log(10)) < 0)
+
+        candidate_cols = candidate_cols & ((matches_only - matches_only.max(dim=0,keepdim=True)[0]) > -abs(math.log(10)) )
+        self._linkage_matrix = 1.0/(enhanced_collisions).sum(dim=-1)
+
+        diff_collisions = enhanced_collisions.sum(dim=-1) - collisions.sum(dim=-1)
 
 
         #self._linkage_matrix.fill_diagonal_(1)
         for row in range(candidate_cols.shape[0]):
             candidates = torch.cat([torch.nonzero(candidate_cols[row].squeeze(),as_tuple=False).reshape(-1),
-                                    torch.tensor([log_likelihood_matrix.shape[1]]).reshape(-1)],dim=0)
+                                    torch.tensor([log_likelihood_matrix.shape[1]-1]).reshape(-1)],dim=0)
             self._candidate_indicies.append(torch.atleast_1d(candidates))
         distance_matrix = self.shortest_paths_floyd(self._linkage_matrix, undirected=True)
         return distance_matrix
@@ -216,7 +269,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                                                                  self._base_row_decision_likelihoods_unnormalized,
                                                                  row_order,
                                                                  decision_counter,
-                                                                 candidate_indicies=candidate_indicies[current_row_index],
+                                                                 all_candidate_indicies=candidate_indicies,
                                                                  max_beam_width=100,
                                                                  max_depth=max(5,max_depths[decision_counter]),)
 
@@ -332,15 +385,24 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                         log_likelihoods: torch.Tensor,
                         ordered_rows: torch.Tensor,
                         current_row: int,
-                        candidate_indicies: torch.tensor,
+                        all_candidate_indicies: torch.tensor,
                         max_beam_width: int,
                         max_depth: int, ):
 
+        candidate_indicies = all_candidate_indicies[ordered_rows[current_row]]
         n_cols = availableCols.shape[1]
         k = candidate_indicies.shape[0]
+        final_row = min(current_row + max_depth, len(ordered_rows))
+
+        relevant_cols = torch.zeros((availableCols.shape[1]), dtype=torch.bool)
+        for i in range(current_row, final_row):
+            relevant_cols[all_candidate_indicies[ordered_rows[i]]] = True
+        #
+
+
 
         #Check which decisions are still available in at least one sample
-        unique_availableCols, reverse_index = torch.unique(availableCols,return_inverse=True,dim=0)
+        _, reverse_index, _, unique_availableCols,   = self.unique_rows_by_bits(availableCols,torch.nonzero(relevant_cols).squeeze())
         n_unique_samples = unique_availableCols.shape[0]
         top_k_col_indexes = candidate_indicies.expand(n_unique_samples, -1).clone()
         top_k_likelihoods = log_likelihoods[ordered_rows[current_row],:].masked_fill(~unique_availableCols, -torch.inf)
@@ -371,13 +433,13 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         future_availableCols[:, :, n_cols - 1] = True
         future_availableCols = future_availableCols.unsqueeze(-2).expand(-1, -1, max_beam_width, -1).clone()
         future_logsumexps[unique_sample_indexes.squeeze(-1),k_indexes.squeeze().unsqueeze(0),:] = top_k_likelihoods.unsqueeze(-1).type(torch.float)
-        final_row = min(current_row + max_depth+1, len(ordered_rows))
         current_beam_width = 1
         for i in range(current_row+1,final_row):
+            current_candidate_indices = all_candidate_indicies[ordered_rows[i]]
             active_future_logsumexps = future_logsumexps[:,:,:current_beam_width]
 
-            top_cols = torch.where(future_availableCols[:,:,:current_beam_width,:],
-                                   log_likelihoods[ordered_rows[i],:].unsqueeze(0).unsqueeze(0),
+            top_cols = torch.where(future_availableCols[:,:,:current_beam_width,current_candidate_indices],
+                                   log_likelihoods[ordered_rows[i],current_candidate_indices].unsqueeze(0).unsqueeze(0),
                                    -torch.inf)
             top_cols += active_future_logsumexps.unsqueeze(-1)
 
@@ -385,10 +447,12 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
             top_cols = top_cols.reshape(n_unique_samples, k, -1)
             if proposed_beam_width > max_beam_width:
                 top_cols,indexes = torch.topk(top_cols, max_beam_width, dim=-1)
-                originating_beam_idx, col_idx = torch.unravel_index(indexes, (current_beam_width, n_cols))
+                originating_beam_idx, col_idx = torch.unravel_index(indexes, (current_beam_width, len(current_candidate_indices)))
                 proposed_beam_width = max_beam_width
             else:
-                originating_beam_idx, col_idx = torch.unravel_index(torch.arange(proposed_beam_width), (current_beam_width, n_cols))
+                originating_beam_idx, col_idx = torch.unravel_index(torch.arange(proposed_beam_width), (current_beam_width, len(current_candidate_indices)))
+
+            col_idx = current_candidate_indices[col_idx]
 
             proposed_beam_indexes = torch.arange(proposed_beam_width).unsqueeze(0).unsqueeze(0)
             #update Beams
@@ -412,7 +476,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         threshold = np.max(distance[distance < float('inf')])
         distance[distance == float('inf')] = threshold+1
         #cluster_labels = torch.from_numpy(SpectralClustering(affinity='precomputed',assign_labels='cluster_qr').fit_predict(W))
-        model = AgglomerativeClustering(n_clusters=None,metric='precomputed',linkage='single',distance_threshold=min(3,threshold)).fit(distance)
+        model = AgglomerativeClustering(n_clusters=None,metric='precomputed',linkage='single',distance_threshold=min(1,threshold)).fit(distance)
         linkage = to_linkage(model)
         cluster_labels = torch.from_numpy(model.labels_)
         unique_clusters, inverse, counts = torch.unique(cluster_labels, return_counts=True, return_inverse=True)
@@ -491,7 +555,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         return self._csp_distribution
 
     @csp_distribution.setter
-    def csp_distribution(self, csp_distribution: torch.distributions.Distribution):
+    def csp_distribution(self, csp_distribution):
         self._csp_distribution = csp_distribution.clone()
         self._calculateDecisionLogLikelihood()
 

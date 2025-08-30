@@ -77,6 +77,9 @@ class RegFrechet(Frechet):
         self._max_val = max_val
         self._n = n
         self._param = torch.cat([self._param,self._max_val,self._n],dim=-1)
+    def log_prob(self, x):
+        self._scale = torch.pow(self._max_val,self._alpha)*torch.log(torch.tensor([2.0]))/self._n
+        return super(RegFrechet, self).log_prob(x)
     @property
     def max_val(self):
         return self._max_val
