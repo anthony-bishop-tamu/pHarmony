@@ -228,16 +228,15 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         c[torch.arange(log_likelihood_matrix.shape[0]).unsqueeze(-1),indexes] = True
         candidate_cols = candidate_cols & c
 
+        mat = log_likelihood_matrix.clone()
+        mat[:,:-1].masked_fill_(~candidate_cols, float('-inf'))
+        matches_only = mat.softmax(dim=-1)[:,:-1].log()
 
         collisions = candidate_cols.unsqueeze(1) & candidate_cols.unsqueeze(0)
 
-        self._linkage_matrix = 1.0/(collisions).sum(dim=-1)
+        enhanced_collisions = collisions &  (torch.abs(matches_only.unsqueeze(-2) - matches_only.unsqueeze(0)) - abs(math.log(100)) < 0)
 
-        matches_only = log_likelihood_matrix.softmax(dim=-1)[:,:-1].log()
-
-        enhanced_collisions = collisions &  (torch.abs(matches_only.unsqueeze(-2) - matches_only.unsqueeze(0)) - abs(math.log(10)) < 0)
-
-        candidate_cols = candidate_cols & ((matches_only - matches_only.max(dim=0,keepdim=True)[0]) > -abs(math.log(10)) )
+        candidate_cols = candidate_cols & ((matches_only - matches_only.max(dim=0,keepdim=True)[0]) > -abs(math.log(100)) )
         self._linkage_matrix = 1.0/(enhanced_collisions).sum(dim=-1)
 
         diff_collisions = enhanced_collisions.sum(dim=-1) - collisions.sum(dim=-1)
