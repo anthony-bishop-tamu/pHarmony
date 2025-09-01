@@ -234,12 +234,18 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
         collisions = candidate_cols.unsqueeze(1) & candidate_cols.unsqueeze(0)
 
-        enhanced_collisions = collisions &  (torch.abs(matches_only.unsqueeze(-2) - matches_only.unsqueeze(0)) - abs(math.log(100)) < 0)
+        collisions_in_range = (torch.abs(matches_only.unsqueeze(-2) - matches_only.unsqueeze(0)) - abs(math.log(100)) < 0)
+        for col in range(log_likelihood_matrix.shape[1]-1):
+            temp = torch.nonzero(collisions_in_range[:,:,col])
+            unique_rows = torch.unique(temp.flatten())
+            collisions_in_range[unique_rows.unsqueeze(-1),unique_rows.unsqueeze(0),col] = True
 
-        candidate_cols = candidate_cols & ((matches_only - matches_only.max(dim=0,keepdim=True)[0]) > -abs(math.log(100)) )
+        enhanced_collisions = collisions & collisions_in_range
+
+        candidate_cols = enhanced_collisions.any(dim=1)
         self._linkage_matrix = 1.0/(enhanced_collisions).sum(dim=-1)
 
-        diff_collisions = enhanced_collisions.sum(dim=-1) - collisions.sum(dim=-1)
+        #diff_collisions = enhanced_collisions.sum(dim=-1) - collisions.sum(dim=-1)
 
 
         #self._linkage_matrix.fill_diagonal_(1)
@@ -269,8 +275,8 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                                                                  row_order,
                                                                  decision_counter,
                                                                  all_candidate_indicies=candidate_indicies,
-                                                                 max_beam_width=100,
-                                                                 max_depth=max(5,max_depths[decision_counter]),)
+                                                                 max_beam_width=1000,
+                                                                 max_depth=max_depths[decision_counter])
 
         #log_probabilities.masked_fill_(~availableCols[:,top_k_indicies],-torch.inf)
         log_probabilities -= log_probabilities.logsumexp(dim=-1,keepdim=True)
@@ -391,10 +397,11 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         candidate_indicies = all_candidate_indicies[ordered_rows[current_row]]
         n_cols = availableCols.shape[1]
         k = candidate_indicies.shape[0]
-        final_row = min(current_row + max_depth, len(ordered_rows))
+        final_row = min(current_row + max_depth+1, len(ordered_rows))
 
         relevant_cols = torch.zeros((availableCols.shape[1]), dtype=torch.bool)
-        for i in range(current_row, final_row):
+        relevant_cols[candidate_indicies] = True
+        for i in range(current_row+1, final_row):
             relevant_cols[all_candidate_indicies[ordered_rows[i]]] = True
         #
 
@@ -464,7 +471,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
             current_beam_width = proposed_beam_width
 
         #
-        future_logsumexps = future_logsumexps.logsumexp(dim=-1)
+        future_logsumexps = future_logsumexps[:,:,:current_beam_width].logsumexp(dim=-1)
 
         return future_logsumexps[reverse_index,...], top_k_col_indexes[reverse_index,...]
     #
@@ -475,7 +482,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         threshold = np.max(distance[distance < float('inf')])
         distance[distance == float('inf')] = threshold+1
         #cluster_labels = torch.from_numpy(SpectralClustering(affinity='precomputed',assign_labels='cluster_qr').fit_predict(W))
-        model = AgglomerativeClustering(n_clusters=None,metric='precomputed',linkage='single',distance_threshold=min(1,threshold)).fit(distance)
+        model = AgglomerativeClustering(n_clusters=None,metric='precomputed',linkage='single',distance_threshold=1.01).fit(distance)
         linkage = to_linkage(model)
         cluster_labels = torch.from_numpy(model.labels_)
         unique_clusters, inverse, counts = torch.unique(cluster_labels, return_counts=True, return_inverse=True)
