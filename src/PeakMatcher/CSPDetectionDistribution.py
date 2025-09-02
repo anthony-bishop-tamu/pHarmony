@@ -223,7 +223,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         candidate_cols = log_likelihood_matrix[:,:-1] > (log_likelihood_matrix[:,-1].unsqueeze(-1))
         #candidate_cols = candidate_cols & self.top_mass_mask_from_logits(log_likelihood_matrix, mass=0.99)[:,:-1]
         mat = log_likelihood_matrix[:,:-1].masked_fill(~candidate_cols, float('-inf'))
-        vals, indexes = torch.topk(mat,k=10,dim=-1)
+        vals, indexes = torch.topk(mat,k=4,dim=-1)
         c = torch.zeros_like(candidate_cols)
         c[torch.arange(log_likelihood_matrix.shape[0]).unsqueeze(-1),indexes] = True
         candidate_cols = candidate_cols & c
@@ -234,7 +234,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
         collisions = candidate_cols.unsqueeze(1) & candidate_cols.unsqueeze(0)
 
-        collisions_in_range = (torch.abs(matches_only.unsqueeze(-2) - matches_only.unsqueeze(0)) - abs(math.log(100)) < 0)
+        collisions_in_range = (torch.abs(matches_only.unsqueeze(-2) - matches_only.unsqueeze(0)) - abs(math.log(10)) < 0)
         for col in range(log_likelihood_matrix.shape[1]-1):
             temp = torch.nonzero(collisions_in_range[:,:,col])
             unique_rows = torch.unique(temp.flatten())

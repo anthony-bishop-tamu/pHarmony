@@ -105,7 +105,7 @@ def initalizeAllComponents(distances, dims, max_predicted_dm, max_CSP_count):
     #                                 torch.tensor([max_predicted_dm],dtype=torch.float64),
     #                                 torch.tensor([max_CSP_count],dtype=torch.float64))
     #csp_distribution = Frechet(csp_distribution.alpha.detach().clone().requires_grad_(True),csp_distribution.scale.detach().clone().requires_grad_(True))
-    csp_distribution=Frechet(torch.tensor([2.0],requires_grad=True),torch.tensor([10.0],requires_grad=True))
+    csp_distribution=Frechet(torch.tensor([10.0],requires_grad=True),torch.tensor([10.0],requires_grad=True))
 
     non_matching_distribution = UniformDistanceSquared(dim=torch.tensor(dims,dtype=torch.float64),
                                                        Rmax=(distances.max()).expand(distances.shape[0]))
@@ -289,8 +289,8 @@ def maximization(samples: tuple,
     PEAK_MATCHER_LOGGER = logging.getLogger(__name__)
     # optimizer = torch.optim.Adam([csp_assignment_params, csp_distribution_params], lr=1E-3)
     csp_distribution = dist.csp_distribution
-    optimizer = torch.optim.AdamW([csp_distribution.alpha ], lr=learning_rate,weight_decay=1e-2)
-    maxIterators = 10000
+    optimizer = torch.optim.AdamW([csp_distribution.alpha, csp_distribution.scale ], lr=learning_rate,weight_decay=1e-2)
+    maxIterators = 1000
     prevLoss = torch.finfo(torch.float64).max
     previous_alpha = csp_distribution.alpha.detach().clone()
     previous_scale = csp_distribution.scale.detach().clone()
@@ -312,7 +312,7 @@ def maximization(samples: tuple,
             PEAK_MATCHER_LOGGER.info(
                 "Step=%6d Loss=%12.3e, diff=%12.3e, csp_alpha=%12.3e, csp_scale=%12.3e csp_alpha_grad=%12.3e csp_scale_grad=%12.3e, lr=%12.3e csp_dist_var= %12.3e max_predicted_dnm=%12.3e",
                 i, loss.item(), prevLoss - loss.item(), csp_distribution.alpha.item(), csp_distribution.scale.item(),
-                csp_distribution.alpha.grad.item(), 0.00,  optimizer.param_groups[0]['lr'], csp_distribution.variance(),
+                csp_distribution.alpha.grad.item(), csp_distribution.scale.grad.item(),  optimizer.param_groups[0]['lr'], csp_distribution.variance(),
                 max_predicted_dm)
         #
         if not (torch.tensor([csp_distribution.alpha, csp_distribution.alpha.grad]).isfinite().all() and
@@ -320,7 +320,7 @@ def maximization(samples: tuple,
             with torch.no_grad():
                 csp_distribution.alpha[0] = previous_alpha[0]
                 csp_distribution.scale[0] = previous_scale[0]
-            optimizer = torch.optim.AdamW([csp_distribution.alpha ], lr=optimizer.param_groups[0]['lr'] * 0.5, weight_decay=1e-2)
+            optimizer = torch.optim.AdamW([csp_distribution.alpha, csp_distribution.scale ], lr=optimizer.param_groups[0]['lr'] * 0.5, weight_decay=1e-2)
 
             PEAK_MATCHER_LOGGER.verbose("Lowering Learning rate")
             continue
@@ -350,13 +350,13 @@ def runEMStep(distances: torch.tensor,
         #expectation step
         samples = determineSampleSize(sampleSize,dist)
         positionProbs = calculatePositionProb(samples, distances.shape).detach()
-        return samples, dist
+        #return samples, dist
         # Calculate new mixture weights
         csp_mixture_weights, matching_mixture_weights,missing_mixture_weights = calculateMixtureWeights(dist.csp_posterior_probabilities,positionProbs,
                                                                                                         csp_mixture_priors,matching_mixture_priors,missing_mixture_priors)
 
         n_csps = max(5.0,(dist.csp_posterior_probabilities.softmax(dim=-1)[...,1] * positionProbs).sum().item())
-        dist.csp_distribution = RegFrechet(dist.csp_distribution.alpha,dist.csp_distribution._max_val,torch.atleast_1d(torch.tensor([n_csps])))
+        dist.csp_distribution = Frechet(dist.csp_distribution.alpha,dist.csp_distribution.scale)
         #maximization step
         dist = maximization(samples,
                      distances.detach(),
