@@ -14,6 +14,12 @@ class SamplingError(Exception):
     pass
 class EnumerationError(Exception):
     pass
+
+class LowESSError(Exception):
+    pass
+
+class ExcessiveBeamSearchError(Exception):
+    pass
 from tqdm import tqdm
 
 def to_linkage(model):
@@ -322,7 +328,9 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
             ESS_History[decision_counter] = ess_ratio
         resample = (ESS_History[min:decision_counter] < 0.5).all()
         if force_resample:
-            print(f"{decision_counter}: ESS ratio:, {ess_ratio:0.3f}; Resample")
+            if ess_ratio < 0.1:
+                raise LowESSError(f"ESS ratio {ess_ratio} is too low at resampling")
+            #print(f"{decision_counter}: ESS ratio:, {ess_ratio:0.3f}; Resample")
             # Step 1: Create systematic positions
             positions = (torch.arange(nsamples, dtype=sample_weights.dtype, device=sample_weights.device) +
                          torch.rand(1,dtype=sample_weights.dtype,device=sample_weights.device)) / nsamples
@@ -339,7 +347,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
             decision_log[...,...] =decision_log[indices,...]
             return
         else:
-            print(f"{decision_counter}: ESS ratio:, {ess_ratio:0.3f}")
+            #print(f"{decision_counter}: ESS ratio:, {ess_ratio:0.3f}")
             return
     #
     def deduplicate_masks(self,availableCols: torch.Tensor):
@@ -449,6 +457,10 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                                    -torch.inf)
             top_cols += active_future_logsumexps.unsqueeze(-1)
 
+            if top_cols.numel()*top_cols.element_size() > 1E9:
+                raise ExcessiveBeamSearchError("Internal tensor exceeded approx 1 GB")
+
+
             proposed_beam_width = top_cols.shape[-1]*top_cols.shape[-2]
             top_cols = top_cols.reshape(n_unique_samples, k, -1)
             if proposed_beam_width > max_beam_width:
@@ -522,7 +534,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
                 self._resample(sample, sample_weights, availableRows,availableCols,decision_log,decision_counter,ESS_History,force_resample=max_depths[decision_counter] == 0)
             except Exception as e:
-                raise SamplingError(f"Error during sampling of matching matrices \n"
+                raise SamplingError(f"Error during sampling of matching matrices {e} \n"
                                     f"Step: {decision_counter} of {availableRows.shape[0]} \n"
                                     f"CSP Distribution Parameters: {self.csp_distribution.param} \n"
                                     f"CSP_weight logits: {self._csp_mixture_weights} probits: {(self._csp_mixture_weights-self._csp_mixture_weights.logsumexp(dim=0,keepdim=True)).exp()}\n"
