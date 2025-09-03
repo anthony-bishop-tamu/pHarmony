@@ -153,15 +153,15 @@ def calculateMixtureWeights(csp_posterior_probabilities: torch.Tensor,
     csp_mixture_weights = (csp_mixture_weights.sum(dim=(0,1)) + (csp_mixture_weight_priors))/(matching_posterior_probabilities.sum() + (csp_mixture_weight_priors).sum())
     matching_mixture_weights = (torch.tensor([matching_posterior_probabilities.detach().sum(),(1-matching_posterior_probabilities.detach()).sum()])
                                 +(matching_mixture_weight_priors))/(matching_posterior_probabilities.numel() + matching_mixture_weight_priors.sum())
-    missing_mixture_weights = (torch.tensor([matching_posterior_probabilities.detach().sum(),(1-matching_posterior_probabilities.detach().sum(dim=-1)).sum()])
-                                +(missing_mixture_weight_priors))/(matching_posterior_probabilities.shape[0] + missing_mixture_weight_priors.sum())
+    #missing_mixture_weights = (torch.tensor([matching_posterior_probabilities.detach().sum(),(1-matching_posterior_probabilities.detach().sum(dim=-1)).sum()])
+    #                            +(missing_mixture_weight_priors))/(matching_posterior_probabilities.shape[0] + missing_mixture_weight_priors.sum())
     if csp_mixture_weights[1] < 1E-3:
         csp_mixture_weights = torch.tensor([1.0-1E-3,1E-3],dtype=torch.float64)
 
     assert (1 >= csp_mixture_weights).all() and (csp_mixture_weights >= 0).all()
     assert (1 >= matching_mixture_weights).all() and (matching_mixture_weights >= 0).all()
-    assert (1 >= missing_mixture_weights).all() and (missing_mixture_weights >= 0).all()
-    return csp_mixture_weights, matching_mixture_weights,missing_mixture_weights
+    #assert (1 >= missing_mixture_weights).all() and (missing_mixture_weights >= 0).all()
+    return csp_mixture_weights, matching_mixture_weights,None
 def verifyTensorConvergence(torchPreviousParameter: torch.tensor,
                                torchNewParameter: torch.tensor,
                                averageDeviation: torch.tensor,
@@ -211,7 +211,7 @@ def EM_minimization_function(samples, dist: CSPDetectionDistribution,
 
     csp_mixture_weights = dist.csp_mixture_weights
     matching_mixture_weights = dist.matching_mixture_weights
-    missing_mixture_weights = dist.missing_mixture_weights
+    #missing_mixture_weights = dist.missing_mixture_weights
 
     logLikelihoodTerm = dist.log_prob(samples).sum()#/(samples.numel()*dist._distances.numel())
     #logLikelihoodTerm = 0
@@ -226,7 +226,6 @@ def EM_minimization_function(samples, dist: CSPDetectionDistribution,
     loss = (-1 * logLikelihoodTerm +
             -1*((csp_mixture_priors-1.0)*csp_mixture_weights).sum()+
             -1*((matching_mixture_priors-1.0)*matching_mixture_weights).sum() +
-            -1*((missing_mixture_priors - 1.0) * missing_mixture_weights).sum() +
             quantile_regularization + non_matching_log_prob_reg)
     assert loss.isfinite().all()
     return loss
@@ -370,21 +369,10 @@ def runEMStep(distances: torch.tensor,
 
         dist.csp_mixture_weights = csp_mixture_weights.log()
         dist.matching_mixture_weights = matching_mixture_weights.log()
-        dist.missing_mixture_weights = missing_mixture_weights.log()
+        #dist.missing_mixture_weights = missing_mixture_weights.log()
 
 
 
-        if display_distributions:
-            fig = buildPlot(positionProbs,
-                        csp_mixture_weights.detach().numpy(),
-                        dist.no_csp_distribution,
-                        dist.csp_distribution,
-                        dist.non_matching_distribution,
-                        distances,
-                        0.50)
-        
-            fig.show()
-        #
         return samples, dist
 #
 def runEM(distances_squared_normalized: torch.tensor,
@@ -774,8 +762,8 @@ def main():
                             args.output_directory,
                             args.expected_fraction_csp,
                             args.variance_scale_fraction_csp,
-                            args.expected_fraction_missing,
-                            args.variance_scale_fraction_missing,
+                            0.01,
+                            1,
                             args.expected_max_csp,
                             args.gradient_convergence,
                             args.compute_reference_offset,

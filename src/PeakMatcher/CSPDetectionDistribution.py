@@ -80,7 +80,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
         self._csp_mixture_weights = (csp_mixture_weights - csp_mixture_weights.logsumexp(dim=0,keepdim=True)).detach().clone()
         self._matching_mixture_weights = (matching_mixture_weights - matching_mixture_weights.logsumexp(dim=0, keepdim=True)).detach().clone()
-        self._missing_mixture_weights = (missing_mixture_weights - missing_mixture_weights.logsumexp(dim=0, keepdim=True)).detach().clone()
+        #self._missing_mixture_weights = (missing_mixture_weights - missing_mixture_weights.logsumexp(dim=0, keepdim=True)).detach().clone()
         self._csp_distribution = csp_distribution.clone()
        # self._non_matching_parameters =
         self._non_matching_distribution = non_matching_distribution
@@ -100,7 +100,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                                         self._max_predicted_dnm,
                                         self._csp_mixture_weights.detach().clone(),
                                         self._matching_mixture_weights.detach().clone(),
-                                        self._missing_mixture_weights.detach().clone(),
+                                        None,
                                         self._csp_distribution.clone(),
                                         self._non_matching_distribution.clone())
 
@@ -119,7 +119,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         max_csp = torch.tensor([self._max_predicted_dnm])
         differential = torch.cat([self._no_csp_distribution.log_prob(max_csp), self._csp_distribution.log_prob(max_csp)]) + self._csp_mixture_weights
         differential = differential.logsumexp(dim=0).detach()
-        differential = torch.cat([torch.atleast_1d(differential),self._non_matching_distribution.log_prob(max_csp)[0].detach()]) + self._matching_mixture_weights
+        differential = torch.cat([torch.atleast_1d(differential),self._non_matching_distribution.log_prob(max_csp).detach()]) #+ self._matching_mixture_weights
         differential = differential[0]-differential[1]
         unnormalized_csp_posterior_probabilities = self._loglikelihoodMatrix[:,:,0:2].detach() + self._csp_mixture_weights.detach()
 
@@ -130,8 +130,8 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                     self._loglikelihoodMatrix[:, :, 0:2]).logsumexp(dim=-1)
         #parameter corrected loglikelihoods
 
-        final_matching_likelihoods = (torch.stack([unweighted_matching_loglikelihoods,self._loglikelihoodMatrix[:,:,2]],dim=2)
-                                      + self._matching_mixture_weights.detach())
+        final_matching_likelihoods = (torch.stack([unweighted_matching_loglikelihoods,self._loglikelihoodMatrix[:,:,2]],dim=2))
+                                      #+ self._matching_mixture_weights.detach())
 
         self._matching_likelihood = final_matching_likelihoods[:,:,0]
         self._match_non_matching_loglikelihoods = final_matching_likelihoods[:,:,1] + differential
@@ -328,8 +328,8 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
             ESS_History[decision_counter] = ess_ratio
         resample = (ESS_History[min:decision_counter] < 0.5).all()
         if force_resample:
-            if ess_ratio < 0.1:
-                raise LowESSError(f"ESS ratio {ess_ratio} is too low at resampling")
+            #if ess_ratio < 0.05:
+            #    raise LowESSError(f"ESS ratio {ess_ratio} is too low at resampling; reduce expected_max_csp")
             #print(f"{decision_counter}: ESS ratio:, {ess_ratio:0.3f}; Resample")
             # Step 1: Create systematic positions
             positions = (torch.arange(nsamples, dtype=sample_weights.dtype, device=sample_weights.device) +
@@ -538,8 +538,8 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                                     f"Step: {decision_counter} of {availableRows.shape[0]} \n"
                                     f"CSP Distribution Parameters: {self.csp_distribution.param} \n"
                                     f"CSP_weight logits: {self._csp_mixture_weights} probits: {(self._csp_mixture_weights-self._csp_mixture_weights.logsumexp(dim=0,keepdim=True)).exp()}\n"
-                                    f"matching_weight_logits: {self._matching_mixture_weights} probits: {(self._matching_mixture_weights - self._matching_mixture_weights.logsumexp(dim=0,keepdim=True)).exp()}\n"
-                                    f"missing_weight_logits: {self._missing_mixture_weights} probits: {(self._missing_mixture_weights - self._missing_mixture_weights.logsumexp(dim=0,keepdim=True)).exp()}\n") from e
+                                    f"matching_weight_logits: {self._matching_mixture_weights} probits: {(self._matching_mixture_weights - self._matching_mixture_weights.logsumexp(dim=0,keepdim=True)).exp()}\n") from e
+                                    #f"missing_weight_logits: {self._missing_mixture_weights} probits: {(self._missing_mixture_weights - self._missing_mixture_weights.logsumexp(dim=0,keepdim=True)).exp()}\n") from e
 
             decision_counter += 1
 
@@ -606,12 +606,12 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         self._matching_mixture_weights = value.detach().clone()
         self._calculateDecisionLogLikelihood()
 
-    @property
-    def missing_mixture_weights(self) -> torch.Tensor:
-        return self._missing_mixture_weights
-    @missing_mixture_weights.setter
-    def missing_mixture_weights(self,value):
-        self._missing_mixture_weights = value.detach().clone()
-        self._calculateDecisionLogLikelihood()
+    #@property
+    #def missing_mixture_weights(self) -> torch.Tensor:
+     #   return self._missing_mixture_weights
+    #@missing_mixture_weights.setter
+    #def missing_mixture_weights(self,value):
+    #    self._missing_mixture_weights = value.detach().clone()
+    #    self._calculateDecisionLogLikelihood()
 
 #
