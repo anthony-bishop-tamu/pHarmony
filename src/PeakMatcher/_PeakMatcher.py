@@ -313,15 +313,17 @@ def determineSampleSize(startingSample: int,dist: CSPDetectionDistribution):
     PEAK_MATCHER_LOGGER.info(f"Validating Sample Size: {size} ")
     maxTries = 6
     i = 1
-    while not validateSufficentSampling(sample1,sample2,dist.distances.shape) and i < maxTries:
+    while not validateSufficentSampling(sample1,sample2,dist.distances.shape):
         size *= 2
+        if size > dist.distances.shape[0]*1000:
+            raise SampleSizeToLargeError(
+                f"Stopped at sample size {size}: sample variance is still too high, likely due to inefficent beam searching; consider reducing expected max CSP")
+
         PEAK_MATCHER_LOGGER.info(f"Increasing Sample Size to: {size}")
         sample1 = dist.sample((int(size),))
         sample2 = dist.sample((int(size),))
         i += 1
     #
-    if i == maxTries:
-        raise SampleSizeToLargeError(f"Stopped at sample size {size}: sample variance is still too high, likely due to inefficent beam searching; consider reducing expected max CSP")
     PEAK_MATCHER_LOGGER.info(f"New sample size {size}")
     return sample1
 #
