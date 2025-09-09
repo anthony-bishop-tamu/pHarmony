@@ -240,7 +240,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
         collisions = candidate_cols.unsqueeze(1) & candidate_cols.unsqueeze(0)
 
-        collisions_in_range = (torch.abs(matches_only.unsqueeze(-2) - matches_only.unsqueeze(0)) - abs(math.log(10)) < 0)
+        collisions_in_range = (torch.abs(matches_only.unsqueeze(-2) - matches_only.unsqueeze(0)) - abs(math.log(3)) < 0)
         for col in range(log_likelihood_matrix.shape[1]-1):
             temp = torch.nonzero(collisions_in_range[:,:,col])
             unique_rows = torch.unique(temp.flatten())

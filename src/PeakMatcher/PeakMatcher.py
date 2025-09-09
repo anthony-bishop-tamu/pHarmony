@@ -303,7 +303,14 @@ def maximization(samples: tuple,
         if prevLoss > loss.item():
             previous_alpha = csp_distribution.alpha.detach().clone()
             previous_scale = csp_distribution.scale.detach().clone()
-        optimizer.step()
+        if torch.tensor([csp_distribution.alpha.grad, csp_distribution.scale.grad]).isfinite().all():
+            optimizer.step()
+        else:
+            optimizer = torch.optim.AdamW([csp_distribution.alpha, csp_distribution.scale],
+                                          lr=optimizer.param_groups[0]['lr'] * 0.5, weight_decay=1e-2)
+
+            PEAK_MATCHER_LOGGER.verbose("Lowering Learning rate")
+            continue
 
         # with torch.no_grad():
         #    csp_distribution.alpha.clamp_(min=1.0)
@@ -314,7 +321,7 @@ def maximization(samples: tuple,
                 csp_distribution.alpha.grad.item(), csp_distribution.scale.grad.item(),  optimizer.param_groups[0]['lr'], csp_distribution.variance(),
                 max_predicted_dm)
         #
-        if not (torch.tensor([csp_distribution.alpha, csp_distribution.alpha.grad]).isfinite().all() and
+        if not (torch.tensor([csp_distribution.alpha, csp_distribution.alpha.grad, csp_distribution.scale, csp_distribution.scale.grad]).isfinite().all() and
                 csp_distribution.alpha.item() > 0 and csp_distribution.scale.item() > 0 and prevLoss - loss.item() >= -1E-3):
             with torch.no_grad():
                 csp_distribution.alpha[0] = previous_alpha[0]
@@ -469,7 +476,7 @@ def isBetween0And1(x):
         argparse.ArgumentTypeError("Value must be between 0.0 and 1.0.")
 
 def parseArguments():
-    torch.autograd.set_detect_anomaly(True)
+    #torch.autograd.set_detect_anomaly(True)
     parser = argparse.ArgumentParser()
     parser.add_argument('--reference_peak_list', required=True, type=Path, help='reference peak list filename')
     parser.add_argument( '--reference_cs_column_names', required=True, type=str, nargs='+', help='reference cs column names (e.g. \'w1\', \'w2\')')
