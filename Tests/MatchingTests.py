@@ -1,6 +1,6 @@
-from src.PeakMatcher.PeakMatcher import standalone_match_peaks
+import sys, subprocess, shlex, textwrap
 import importlib_resources
-
+from PeakMatcher.PeakMatcher import main as pm_main
 
 
 data_directory =  importlib_resources.files('Tests.TestData')
@@ -10,40 +10,62 @@ data_directory =  importlib_resources.files('Tests.TestData')
 reference_list = data_directory/'case1'/'IL1B_FragmentScreen_Reference_1.list'
 target_list = data_directory/'case1'/'IL1B_FragmentScreen_Fragment_232.list'
 output_directory = data_directory/'case1'/"test_output"
-standalone_match_peaks(reference_list,['w1','w2'], [0.015,0.0015],
-                        target_list,['w1','w2'], [ 0.015,0.0015],
-                        output_directory,
-                        0.1,0.5,
-                        0.1,2.0,
-                        0.1,
-                        1E-5,
-                        True,False,0.9, [0.101,1],log_level=20,log_file=True
-                         )
+arguments = [ "--reference_peak_list", str(reference_list),
+              "--reference_cs_column_names", 'w1','w2',
+              "--reference_peak_list_error", "0.015", "0.0015",
+              "--target_peak_list", str(target_list),
+              "--target_cs_column_names", "w1","w2",
+              "--target_peak_list_error", "0.015", "0.0015",
+              "--output_directory",str(output_directory),
+              "--expected_fraction_csp", "0.1",
+              "--variance_scale_fraction_csp", "1",
+              "--expected_max_csp", "0.1",
+              "--gradient_convergence", "1E-5",
+              "--confidence_cutoff", "0.9",
+              "--CSP_scaling_factor", "0.101", "1",
+              "--log_file"]
+
+pm_main(arguments)
 
 #case2
 reference_list = data_directory/'case2'/'IL1B_manually_transferred_assignments_fitted_81'
 target_list = data_directory/'case2'/'fitted_401.list'
 output_directory = data_directory/'case2'/"test_output"
+arguments = [ "--reference_peak_list", str(reference_list),
+              "--reference_cs_column_names", 'w1','w2',
+              "--reference_peak_list_error", "0.015", "0.0015",
+              "--target_peak_list", str(target_list),
+              "--target_cs_column_names", "w1","w2",
+              "--target_peak_list_error", "0.015", "0.0015",
+              "--output_directory",str(output_directory),
+              "--expected_fraction_csp", "0.1",
+              "--variance_scale_fraction_csp", "1",
+              "--expected_max_csp", "0.1",
+              "--gradient_convergence", "1E-5",
+              "--confidence_cutoff", "0.9",
+              "--CSP_scaling_factor", "0.101", "1",
+              "--log_file"]
 
-standalone_match_peaks(reference_list,['w1','w2'], [0.03,0.003],
-                        target_list,['w1','w2'], [ 0.03,0.003],
-                        output_directory,
-                        0.1,0.5,
-                        0.1,2.0,
-                        0.1,
-                        1E-5, 
-                        False,False,0.9, [0.101,1], log_level=20,log_file=True)
+pm_main(arguments)
 
 #case3
 reference_list = data_directory/'case3'/'km_processingAndPeakPicking_2DTROSY_1031.list'
 target_list = data_directory/'case3'/'km_processingAndPeakPicking_2DTROSY_1041.list'
 output_directory = data_directory/'case3'/"test_output"
 
-standalone_match_peaks(reference_list,['w1','w2'], [0.03,0.003],
-                        target_list,['w1','w2'], [ 0.03,0.003],
-                        output_directory,
-                        0.1,0.5,
-                        0.01,2.0,
-                        0.1,
-                        1E-2,
-                        False,False,0.9, [0.101,1], log_level=20,log_file=True)
+arguments = [ "--reference_peak_list", str(reference_list),
+              "--reference_cs_column_names", 'w1','w2',
+              "--reference_peak_list_error", "0.015", "0.0015",
+              "--target_peak_list", str(target_list),
+              "--target_cs_column_names", "w1","w2",
+              "--target_peak_list_error", "0.015", "0.0015",
+              "--output_directory",str(output_directory),
+              "--expected_fraction_csp", "0.1",
+              "--variance_scale_fraction_csp", "1",
+              "--expected_max_csp", "0.1",
+              "--gradient_convergence", "1E-5",
+              "--confidence_cutoff", "0.9",
+              "--CSP_scaling_factor", "0.101", "1",
+              "--log_file"]
+
+pm_main(arguments)

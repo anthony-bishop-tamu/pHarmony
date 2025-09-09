@@ -66,21 +66,16 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
     def __init__(self, distances: torch.tensor,
                  max_predicted_dnm: float,
                  csp_mixture_weights: torch.tensor,
-                 matching_mixture_weights: torch.tensor,
-                 missing_mixture_weights: torch.tensor,
                  csp_distribution: torch.distributions.Distribution,
                  non_matching_distribution: torch.distributions.Distribution):
         super().__init__()
         #assert(distances.shape[0] >= distances.shape[1])
         assert((2,) == csp_mixture_weights.shape)
-        assert ((2,) == matching_mixture_weights.shape)
 
         self._distances = distances
         self._max_predicted_dnm = max_predicted_dnm
 
         self._csp_mixture_weights = (csp_mixture_weights - csp_mixture_weights.logsumexp(dim=0,keepdim=True)).detach().clone()
-        self._matching_mixture_weights = (matching_mixture_weights - matching_mixture_weights.logsumexp(dim=0, keepdim=True)).detach().clone()
-        #self._missing_mixture_weights = (missing_mixture_weights - missing_mixture_weights.logsumexp(dim=0, keepdim=True)).detach().clone()
         self._csp_distribution = csp_distribution.clone()
        # self._non_matching_parameters =
         self._non_matching_distribution = non_matching_distribution
@@ -98,9 +93,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
     def clone(self):
         return CSPDetectionDistribution(self._distances.detach().clone(),
                                         self._max_predicted_dnm,
-                                        self._csp_mixture_weights.detach().clone(),
-                                        self._matching_mixture_weights.detach().clone(),
-                                        None,
+                                        self.csp_mixture_weights.detach().clone(),
                                         self._csp_distribution.clone(),
                                         self._non_matching_distribution.clone())
 
@@ -318,6 +311,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                   ESS_History: torch.tensor,
                   force_resample=False):
 
+        logger = logging.getLogger(__name__)
         normalized_weights = (sample_weights - sample_weights.logsumexp(dim=-1, keepdim=True)).exp()
         ess = 1.0/torch.pow(normalized_weights,2).sum()
         nsamples = np.prod(sample.shape[0:-1])
@@ -326,11 +320,10 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         min = max(0,decision_counter-10)
         if decision_counter < ESS_History.shape[0]:
             ESS_History[decision_counter] = ess_ratio
-        resample = (ESS_History[min:decision_counter] < 0.5).all()
         if force_resample:
             #if ess_ratio < 0.05:
             #    raise LowESSError(f"ESS ratio {ess_ratio} is too low at resampling; reduce expected_max_csp")
-            #print(f"{decision_counter}: ESS ratio:, {ess_ratio:0.3f}; Resample")
+            logger.verbose(f"{decision_counter}: ESS ratio:, {ess_ratio:0.3f}; Resample")
             # Step 1: Create systematic positions
             positions = (torch.arange(nsamples, dtype=sample_weights.dtype, device=sample_weights.device) +
                          torch.rand(1,dtype=sample_weights.dtype,device=sample_weights.device)) / nsamples
@@ -347,7 +340,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
             decision_log[...,...] =decision_log[indices,...]
             return
         else:
-            #print(f"{decision_counter}: ESS ratio:, {ess_ratio:0.3f}")
+            logger.verbose(f"{decision_counter}: ESS ratio:, {ess_ratio:0.3f}")
             return
     #
     def deduplicate_masks(self,availableCols: torch.Tensor):
@@ -402,6 +395,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                         max_beam_width: int,
                         max_depth: int, ):
 
+        logger = logging.getLogger(__name__)
         candidate_indicies = all_candidate_indicies[ordered_rows[current_row]]
         n_cols = availableCols.shape[1]
         k = candidate_indicies.shape[0]
@@ -433,7 +427,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         future_availableCols = unique_availableCols.clone().unsqueeze(1).expand(-1,k,-1).clone()
         future_logsumexps = torch.zeros((n_unique_samples,k,max_beam_width),dtype=torch.float32)
 
-        print(f"Running Beam Search: unique: {n_unique_samples}, k:{k}, max_beam_width:{max_beam_width}, max_depth:{max_depth}")
+        logger.verbose(f"Running Beam Search: unique: {n_unique_samples}, k:{k}, max_beam_width:{max_beam_width}, max_depth:{max_depth}")
 
         #Build indexes
         unique_sample_indexes = torch.arange(n_unique_samples).unsqueeze(-1).unsqueeze(-1)
@@ -478,8 +472,8 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
             future_availableCols[unique_sample_indexes,k_indexes,proposed_beam_indexes,:] = future_availableCols[unique_sample_indexes,k_indexes,originating_beam_idx,:]
             future_availableCols[unique_sample_indexes,k_indexes,proposed_beam_indexes,col_idx] = False
             future_availableCols[:,:,:,-1] = True
-            running_probability = future_logsumexps.logsumexp(dim=-1).clone()
-            running_probability = (running_probability - running_probability.logsumexp(dim=-1,keepdim=True)).exp()
+            #running_probability = future_logsumexps.logsumexp(dim=-1).clone()
+            #running_probability = (running_probability - running_probability.logsumexp(dim=-1,keepdim=True)).exp()
             current_beam_width = proposed_beam_width
 
         #
@@ -523,11 +517,10 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         decision_counter = 0
         gibbs_sample = False
         ESS_History = torch.ones((availableRows.shape[1],), dtype=torch.float64)*-1
-        if not hasattr(self,'row_order'):
-            row_order,max_depths,neighbor_count= self.determineRowOrder(self._base_row_decision_likelihoods_unnormalized)
+        row_order,max_depths,neighbor_count= self.determineRowOrder(self._base_row_decision_likelihoods_unnormalized)
 
             #self.cluster_count[...] = 10000
-        for _ in tqdm(enumerate(row_order),desc="Matching Rows"):
+        for _ in tqdm(enumerate(row_order),desc="Matching Rows",total=row_order.shape[0]):
             try:
                 step_weights = self.__getNextInSequence(sample, sample_indexes, row_order,max_depths,self._candidate_indicies, availableCols, decision_log, decision_counter)
                 sample_weights = sample_weights+step_weights
@@ -543,8 +536,6 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
             decision_counter += 1
 
-        #self._resample(sample, sample_weights, availableRows,availableCols,decision_log,decision_counter,ESS_History,force_resample=True)
-        #assert torch.abs(self.log_prob(sample) - partial_log_likelihood.sum()) <= 1
         return sample, sample_indexes, availableRows,availableCols, decision_log, gibbs_sample
 
 
@@ -597,14 +588,6 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         self._csp_mixture_weights = value.detach().clone()
         self._calculateDecisionLogLikelihood()
 
-    @property
-    def matching_mixture_weights(self) -> torch.Tensor:
-        return self._matching_mixture_weights
-
-    @matching_mixture_weights.setter
-    def matching_mixture_weights(self,value):
-        self._matching_mixture_weights = value.detach().clone()
-        self._calculateDecisionLogLikelihood()
 
     #@property
     #def missing_mixture_weights(self) -> torch.Tensor:
