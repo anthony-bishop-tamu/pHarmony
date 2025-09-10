@@ -52,6 +52,7 @@ def calculateMixtureWeights(csp_posterior_probabilities: torch.Tensor,
                             matching_posterior_probabilities: torch.Tensor,
                             csp_mixture_weight_priors: torch.Tensor) -> torch.Tensor:
 
+    csp_mixture_weight_priors = torch.zeros_like(csp_mixture_weight_priors) #REMOVINGINFLUENCE OF PRIOR
     pseudo_csp_posterior_probabilities = csp_posterior_probabilities.exp().clone()
 
     csp_mixture_weights = (pseudo_csp_posterior_probabilities*matching_posterior_probabilities.unsqueeze(-1)).detach()
