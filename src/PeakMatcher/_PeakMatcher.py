@@ -106,10 +106,10 @@ def EM_minimization_function(samples, dist: CSPDetectionDistribution,
 
     logLikelihoodTerm = dist.log_prob(samples).sum()
 
-    quantile_regularization = torch.relu((3 - dist.csp_distribution.quantile(torch.tensor([0.001])))*10)**6
+    #quantile_regularization = torch.relu((3 - dist.csp_distribution.quantile(torch.tensor([0.001])))*10)**6
     loss = (-1 * logLikelihoodTerm +
-            -1*((csp_mixture_priors-1.0)*csp_mixture_weights).sum()+
-            quantile_regularization)
+            -1*((csp_mixture_priors-1.0)*csp_mixture_weights).sum())#+
+            #quantile_regularization)
     assert loss.isfinite().all()
     return loss
 #

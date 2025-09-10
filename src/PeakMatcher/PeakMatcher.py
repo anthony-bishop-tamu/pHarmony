@@ -5,7 +5,7 @@ import time
 import pandas as pd
 import torch
 from PeakMatcher._PeakMatcher import MatchPeaks
-from PeakMatcher.OutputHandling import outputResults
+from PeakMatcher.OutputHandling import outputResults, buildPlot
 import numpy as np
 from PeakMatcher import __version__
 
@@ -205,15 +205,15 @@ def run(args: argparse.Namespace):
                       args.CSP_scaling_factors,
                       args.confidence_cutoff)
 
-        #PEAK_MATCHER_LOGGER.info("Outputing plots")
-        #fig = buildPlot(matchingProbabilities,
-        #                posteriorMatchingDistribution.csp_mixture_weights.exp().detach().cpu().numpy(),
-        #                posteriorMatchingDistribution.no_csp_distribution,
-        #                posteriorMatchingDistribution.csp_distribution,
-        #                distances_squared_normalized.detach(),
-        #                0.50)
+        logger.info("Outputing plots")
+        fig = buildPlot(matchingProbabilities,
+                        posteriorMatchingDistribution.csp_mixture_weights.exp().detach().cpu().numpy(),
+                        posteriorMatchingDistribution.no_csp_distribution,
+                        posteriorMatchingDistribution.csp_distribution,
+                        distances_squared_normalized.detach(),
+                        0.50)
         logger.info(f"Output Directory: {output_directory}")
-        #fig.savefig(output_directory / f"{name_stem}_fittedDistributions.png")
+        fig.savefig(output_directory / f"{name_stem}_fittedDistributions.png")
         logger.info("Done")
         end_time = time.time()
         elapsed_time = end_time - start_time
