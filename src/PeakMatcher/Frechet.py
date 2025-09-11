@@ -55,7 +55,7 @@ class UniformDistanceSquared(torch.distributions.Distribution):
         self._Rmax = Rmax
         super(UniformDistanceSquared, self).__init__(torch.Size(), validate_args=validate_args)
     def log_prob(self, x):
-        return  torch.atleast_1d((self._dim-1) * torch.log(x))
+        return  torch.atleast_1d((self._dim-2)/2 * torch.log(x))
     def clone(self):
         return UniformDistanceSquared(self._dim.detach().clone(), self._Rmax.detach().clone())
 

@@ -112,7 +112,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         max_csp = torch.tensor([self._max_predicted_dnm])
         differential = torch.cat([self._no_csp_distribution.log_prob(max_csp), self._csp_distribution.log_prob(max_csp)]) + self._csp_mixture_weights
         differential = differential.logsumexp(dim=0).detach()
-        differential = torch.cat([torch.atleast_1d(differential),self._non_matching_distribution.log_prob(max_csp).detach()]) #+ self._matching_mixture_weights
+        differential = torch.cat([self._csp_distribution.log_prob(max_csp),self._non_matching_distribution.log_prob(max_csp).detach()]) #+ self._matching_mixture_weights
         differential = differential[0]-differential[1]
         unnormalized_csp_posterior_probabilities = self._loglikelihoodMatrix[:,:,0:2].detach() + self._csp_mixture_weights.detach()
 

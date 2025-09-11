@@ -38,7 +38,7 @@ def initalizeAllComponents(distances, dims):
                                    1.0-matching_probabilities),dim=2)
     initial_weights = (initial_weights - initial_weights.logsumexp(dim=2,keepdim=True)).exp() #enforce normalization for intial weights
 
-    csp_distribution=Frechet(torch.tensor([10.0],requires_grad=True),torch.tensor([10.0],requires_grad=True))
+    csp_distribution=Frechet(torch.tensor([4],requires_grad=True),torch.tensor([10],requires_grad=True))
 
     non_matching_distribution = UniformDistanceSquared(dim=torch.tensor(dims,dtype=torch.float64),
                                                        Rmax=(distances.max()).expand(distances.shape[0]))
