@@ -64,7 +64,7 @@ def validateSample(sample: torch.tensor, availableCols: torch.tensor):
 class CSPDetectionDistribution(torch.distributions.Distribution):
     arg_constraints = {}
     def __init__(self, distances: torch.tensor,
-                 max_predicted_dnm: float,
+                 max_predicted_dnm: torch.tensor,
                  csp_mixture_weights: torch.tensor,
                  csp_distribution: torch.distributions.Distribution,
                  non_matching_distribution: torch.distributions.Distribution):
@@ -109,11 +109,13 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         assert not self._loglikelihoodMatrix[:, :,  1].isnan().any()
         assert not self._loglikelihoodMatrix[:, :, 2].isnan().any()
 
-        max_csp = torch.tensor([self._max_predicted_dnm])
+        max_csp = self._max_predicted_dnm
+        if self._max_predicted_dnm.shape == (1,):
+            max_csp = self._max_predicted_dnm.expand((self.distances.shape[0],1))
         differential = torch.cat([self._no_csp_distribution.log_prob(max_csp), self._csp_distribution.log_prob(max_csp)]) + self._csp_mixture_weights
-        differential = differential.logsumexp(dim=0).detach()
-        differential = torch.cat([self._csp_distribution.log_prob(max_csp),self._non_matching_distribution.log_prob(max_csp).detach()]) #+ self._matching_mixture_weights
-        differential = differential[0]-differential[1]
+        differential = differential.logsumexp(dim=-1).detach()
+        differential = torch.hstack([self._csp_distribution.log_prob(max_csp),self._non_matching_distribution.log_prob(max_csp).detach()]) #+ self._matching_mixture_weights
+        differential = differential[:,0:1]-differential[:,1:2]
         unnormalized_csp_posterior_probabilities = self._loglikelihoodMatrix[:,:,0:2].detach() + self._csp_mixture_weights.detach()
 
         self._csp_posterior_probabilities = unnormalized_csp_posterior_probabilities - unnormalized_csp_posterior_probabilities.logsumexp(dim=-1,keepdim=True)
@@ -321,8 +323,8 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         if decision_counter < ESS_History.shape[0]:
             ESS_History[decision_counter] = ess_ratio
         if force_resample:
-            #if ess_ratio < 0.05:
-            #    raise LowESSError(f"ESS ratio {ess_ratio} is too low at resampling; reduce expected_max_csp")
+            if ess_ratio < 0.2:
+                raise LowESSError(f"ESS ratio {ess_ratio} is too low at resampling; reduce expected_max_csp")
             logger.verbose(f"{decision_counter}: ESS ratio:, {ess_ratio:0.3f}; Resample")
             # Step 1: Create systematic positions
             positions = (torch.arange(nsamples, dtype=sample_weights.dtype, device=sample_weights.device) +

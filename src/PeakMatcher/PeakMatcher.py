@@ -142,9 +142,9 @@ def getPeakPositionsFromFile(filename, cs_cols, uncertaintycols=None, fixedError
 def run(args: argparse.Namespace):
     if args.log_file:
         log_output = args.output_directory / "log.txt"
-        configure_logging(log_file=log_output,level='INFO',overwrite=True)
+        configure_logging(log_file=log_output,level='VERBOSE',overwrite=True)
     else:
-        configure_logging(level="INFO")
+        configure_logging(level="VERBOSE")
 
     logger = logging.getLogger(__name__)
 

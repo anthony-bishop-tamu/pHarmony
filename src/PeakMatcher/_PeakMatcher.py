@@ -43,8 +43,7 @@ def initalizeAllComponents(distances, dims):
 
     csp_distribution=Frechet(torch.tensor([4.0],requires_grad=True),torch.tensor([10.0],requires_grad=True))
 
-    non_matching_distribution = UniformDistanceSquared(dim=torch.tensor(dims,dtype=torch.float64),
-                                                       Rmax=(distances.max()).expand(distances.shape[0]))
+    non_matching_distribution = UniformDistanceSquared(dim=torch.tensor(dims,dtype=torch.float64))
 
 
 
@@ -229,7 +228,7 @@ def runEM(distances_squared_normalized: torch.tensor,
     non_matching_distribution = initial_non_matching_distribution
 
     dist = CSPDetectionDistribution(distances_squared_normalized,
-                                    max_predicted_dnm,
+                                    torch.tensor([max_predicted_dnm],dtype=torch.float),
                                     csp_mixture_weights,
                                     csp_distribution,
                                     non_matching_distribution)

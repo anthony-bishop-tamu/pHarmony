@@ -25,7 +25,7 @@ arguments = [ "--reference_peak_list", str(reference_list),
               "--CSP_scaling_factor", "0.101", "1",
               "--log_file"]
 
-pm_main(arguments)
+#pm_main(arguments)
 
 #case2
 reference_list = data_directory/'case2'/'IL1B_manually_transferred_assignments_fitted_81'
@@ -46,7 +46,7 @@ arguments = [ "--reference_peak_list", str(reference_list),
               "--CSP_scaling_factor", "0.101", "1",
               "--log_file"]
 
-pm_main(arguments)
+#pm_main(arguments)
 
 #case3
 reference_list = data_directory/'case3'/'km_processingAndPeakPicking_2DTROSY_1031.list'
@@ -62,7 +62,7 @@ arguments = [ "--reference_peak_list", str(reference_list),
               "--output_directory",str(output_directory),
               "--expected_fraction_csp", "0.1",
               "--variance_scale_fraction_csp", "1",
-              "--expected_max_csp", "0.1",
+              "--expected_max_csp", "0.2",
               "--gradient_convergence", "1E-5",
               "--confidence_cutoff", "0.9",
               "--CSP_scaling_factor", "0.101", "1",
