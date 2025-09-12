@@ -103,7 +103,7 @@ def parseArguments():
                             default=0.1)
         parser.add_argument("--variance_scale_fraction_csp", type=isPositive,
                             help="scaling factor for variance of the prior distribution of csp distribution weight",
-                            default=1.0)
+                            default=3.0)
         parser.add_argument("--expected_max_csp", type=isPositive,
                             help="Estimate of the maximum expected CSP (ppm); Default is in units of proton ppm",
                             default=0.1)
