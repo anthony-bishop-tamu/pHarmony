@@ -4,6 +4,7 @@ from PeakMatcher.CSPDetectionDistribution import CSPDetectionDistribution
 from PeakMatcher.Frechet import Frechet, UniformDistanceSquared
 import logging
 from tqdm import tqdm
+import math
 class SampleSizeToLargeError(Exception):
     pass
 #
@@ -41,7 +42,7 @@ def initalizeAllComponents(distances, dims):
                                    1.0-matching_probabilities),dim=2)
     initial_weights = (initial_weights - initial_weights.logsumexp(dim=2,keepdim=True)).exp() #enforce normalization for intial weights
 
-    csp_distribution=Frechet(torch.tensor([4.0],requires_grad=True),torch.tensor([10.0],requires_grad=True))
+    csp_distribution=Frechet(torch.tensor([2.0],requires_grad=True),torch.tensor([30.0],requires_grad=True))
 
     non_matching_distribution = UniformDistanceSquared(dim=torch.tensor(dims,dtype=torch.float64))
 
@@ -110,9 +111,15 @@ def EM_minimization_function(samples, dist: CSPDetectionDistribution,
     logLikelihoodTerm = dist.log_prob(samples).sum()
 
     #quantile_regularization = torch.relu((3 - dist.csp_distribution.quantile(torch.tensor([0.001])))*10)**6
+    val = dist.csp_distribution.log_prob(max_predicted_dnm)
+    valm1 = dist.csp_distribution.log_prob(math.exp(math.log(max_predicted_dnm)-1))
+    if hasattr(dist,'min_alpha'):
+        sharpness_reg = (torch.relu(dist.min_alpha - dist.csp_distribution.alpha)*10)**6
+    else:
+        sharpness_reg = 0
     loss = (-1 * logLikelihoodTerm +
-            -1*((csp_mixture_priors-1.0)*csp_mixture_weights).sum())#+
-            #quantile_regularization)
+            -1*((csp_mixture_priors-1.0)*csp_mixture_weights).sum() +
+            sharpness_reg)
     assert loss.isfinite().all()
     return loss
 #

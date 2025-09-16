@@ -9,6 +9,7 @@ from torch.profiler import record_function
 import torch.nn.functional as F
 from sklearn.cluster import SpectralClustering, AgglomerativeClustering
 from scipy.cluster.hierarchy import linkage, dendrogram, optimal_leaf_ordering, leaves_list
+from PeakMatcher.Frechet import Frechet
 import math
 class SamplingError(Exception):
     pass
@@ -74,7 +75,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
         self._distances = distances
         self._max_predicted_dnm = max_predicted_dnm
-
+        self.min_alpha = 2.0
         self._csp_mixture_weights = (csp_mixture_weights - csp_mixture_weights.logsumexp(dim=0,keepdim=True)).detach().clone()
         self._csp_distribution = csp_distribution.clone()
        # self._non_matching_parameters =
@@ -224,9 +225,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         candidate_cols = log_likelihood_matrix[:,:-1] > (log_likelihood_matrix[:,-1].unsqueeze(-1))
         #candidate_cols = candidate_cols & self.top_mass_mask_from_logits(log_likelihood_matrix, mass=0.99)[:,:-1]
         mat = log_likelihood_matrix[:,:-1].masked_fill(~candidate_cols, float('-inf'))
-        vals, indexes = torch.topk(mat,k=4,dim=-1)
-        c = torch.zeros_like(candidate_cols)
-        c[torch.arange(log_likelihood_matrix.shape[0]).unsqueeze(-1),indexes] = True
+        c = self.top_mass_mask_from_logits(mat,mass=0.99)
         candidate_cols = candidate_cols & c
 
         mat = log_likelihood_matrix.clone()
@@ -235,7 +234,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
         collisions = candidate_cols.unsqueeze(1) & candidate_cols.unsqueeze(0)
 
-        collisions_in_range = (torch.abs(matches_only.unsqueeze(-2) - matches_only.unsqueeze(0)) - abs(math.log(3)) < 0)
+        collisions_in_range = (torch.abs(matches_only.unsqueeze(-2) - matches_only.unsqueeze(0)) - abs(math.log(10)) < 0)
         for col in range(log_likelihood_matrix.shape[1]-1):
             temp = torch.nonzero(collisions_in_range[:,:,col])
             unique_rows = torch.unique(temp.flatten())
@@ -243,7 +242,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
         enhanced_collisions = collisions & collisions_in_range
 
-        candidate_cols = enhanced_collisions.any(dim=1)
+        candidate_cols = enhanced_collisions.any(dim=1) & candidate_cols
         self._linkage_matrix = 1.0/(enhanced_collisions).sum(dim=-1)
 
         #diff_collisions = enhanced_collisions.sum(dim=-1) - collisions.sum(dim=-1)
@@ -474,8 +473,8 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
             future_availableCols[unique_sample_indexes,k_indexes,proposed_beam_indexes,:] = future_availableCols[unique_sample_indexes,k_indexes,originating_beam_idx,:]
             future_availableCols[unique_sample_indexes,k_indexes,proposed_beam_indexes,col_idx] = False
             future_availableCols[:,:,:,-1] = True
-            #running_probability = future_logsumexps.logsumexp(dim=-1).clone()
-            #running_probability = (running_probability - running_probability.logsumexp(dim=-1,keepdim=True)).exp()
+            running_probability = future_logsumexps.logsumexp(dim=-1).clone()
+            running_probability = (running_probability - running_probability.logsumexp(dim=-1,keepdim=True)).exp()
             current_beam_width = proposed_beam_width
 
         #
@@ -528,6 +527,8 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                 sample_weights = sample_weights+step_weights
 
                 self._resample(sample, sample_weights, availableRows,availableCols,decision_log,decision_counter,ESS_History,force_resample=max_depths[decision_counter] == 0)
+            except LowESSError as e:
+                raise e
             except Exception as e:
                 raise SamplingError(f"Error during sampling of matching matrices {e} \n"
                                     f"Step: {decision_counter} of {availableRows.shape[0]} \n"
@@ -543,7 +544,16 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
 
     def sample(self,sample_shape=torch.Size()) -> torch.tensor:
-        sample, sample_indexes, avaliableRows,availableCols,decision_log,gibbs_sample = self._sample(sample_shape)
+        while True:
+            try:
+                sample, sample_indexes, avaliableRows,availableCols,decision_log,gibbs_sample = self._sample(sample_shape)
+                break
+            except LowESSError as e:
+                logger = logging.getLogger(__name__)
+                alpha = 2+self.csp_distribution.alpha.detach().clone()
+                logger.info(f"Sampling failed increasing distribution sharpness to {alpha}")
+                self.min_alpha = self.csp_distribution.alpha.detach().clone()
+                self._csp_distribution = Frechet(alpha,self._csp_distribution.scale.detach().clone())
         validateSample(sample,availableCols)
         return sample
 
