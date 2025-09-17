@@ -75,7 +75,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
         self._distances = distances
         self._max_predicted_dnm = max_predicted_dnm
-        self.min_alpha = 2.0
+        self.min_alpha = 1.0
         self._csp_mixture_weights = (csp_mixture_weights - csp_mixture_weights.logsumexp(dim=0,keepdim=True)).detach().clone()
         self._csp_distribution = csp_distribution.clone()
        # self._non_matching_parameters =
@@ -232,8 +232,13 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         mat[:,:-1].masked_fill_(~candidate_cols, float('-inf'))
         matches_only = mat.softmax(dim=-1)[:,:-1].log()
 
-        collisions = candidate_cols.unsqueeze(1) & candidate_cols.unsqueeze(0)
+        competes = (
+                    torch.abs(matches_only.unsqueeze(-2) - matches_only.unsqueeze(0).max(dim=1, keepdim=True)[0]) - abs(
+                math.log(10)) < 0).squeeze(1)
 
+        candidate_cols = candidate_cols & competes
+
+        collisions = candidate_cols.unsqueeze(1) & candidate_cols.unsqueeze(0)
         collisions_in_range = (torch.abs(matches_only.unsqueeze(-2) - matches_only.unsqueeze(0)) - abs(math.log(10)) < 0)
         for col in range(log_likelihood_matrix.shape[1]-1):
             temp = torch.nonzero(collisions_in_range[:,:,col])
@@ -549,11 +554,12 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                 sample, sample_indexes, avaliableRows,availableCols,decision_log,gibbs_sample = self._sample(sample_shape)
                 break
             except LowESSError as e:
-                logger = logging.getLogger(__name__)
-                alpha = 2+self.csp_distribution.alpha.detach().clone()
-                logger.info(f"Sampling failed increasing distribution sharpness to {alpha}")
-                self.min_alpha = self.csp_distribution.alpha.detach().clone()
-                self._csp_distribution = Frechet(alpha,self._csp_distribution.scale.detach().clone())
+                raise e
+                #logger = logging.getLogger(__name__)
+                #alpha = 2+self.csp_distribution.alpha.detach().clone()
+                #logger.info(f"Sampling failed increasing distribution sharpness to {alpha}")
+                #self.min_alpha = self.csp_distribution.alpha.detach().clone()
+                #self._csp_distribution = Frechet(alpha,self._csp_distribution.scale.detach().clone())
         validateSample(sample,availableCols)
         return sample
 
