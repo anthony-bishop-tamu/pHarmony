@@ -218,6 +218,7 @@ def runEMStep(distances: torch.tensor,
         return samples, dist
 #
 def runEM(distances_squared_normalized: torch.tensor,
+              ndim: int,
               initial_csp_mixture_weights: torch.tensor,
               csp_mixture_priors: torch.tensor,
               max_predicted_dnm: float,
@@ -229,12 +230,13 @@ def runEM(distances_squared_normalized: torch.tensor,
 
     PEAK_MATCHER_LOGGER = logging.getLogger(__name__)
     minSteps = 0
-    maxEMSteps = 1000
+    maxEMSteps = 20
     csp_mixture_weights = initial_csp_mixture_weights
     csp_distribution = initial_csp_distribution
     non_matching_distribution = initial_non_matching_distribution
 
     dist = CSPDetectionDistribution(distances_squared_normalized,
+                                    ndim,
                                     torch.tensor([max_predicted_dnm],dtype=torch.float),
                                     csp_mixture_weights,
                                     csp_distribution,
@@ -360,8 +362,6 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
                                                                     variance=variance_scale_fraction_csp * no_csp_std ** 2)  # [no csp, csp ] (Given a match!)
 
 
-
-
     csp_distribution, non_matching_distribution, csp_mixture_weights = initalizeAllComponents(
         distances_squared_normalized.detach(), dims)
     PEAK_MATCHER_LOGGER.info(f"max_predicted_dnm: {max_predicted_dnm}")
@@ -374,6 +374,7 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
 
 
     dist, matching_probs = runEM(distances_squared_normalized,
+          dims,
           initial_csp_mixture_weights,
           csp_mixture_priors,
           max_predicted_dnm,
