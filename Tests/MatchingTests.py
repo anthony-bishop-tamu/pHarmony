@@ -82,7 +82,7 @@ arguments = [ "--reference_peak_list", str(reference_list),
               "--target_cs_column_names", "w1","w2",
               "--target_peak_list_error", "0.015", "0.0015",
               "--output_directory",str(output_directory),
-              "--expected_fraction_csp", "0.1",
+              "--expected_fraction_csp", "0.2",
               "--variance_scale_fraction_csp", "1",
               "--expected_max_csp", "0.2",
               "--gradient_convergence", "1E-5",
@@ -90,7 +90,7 @@ arguments = [ "--reference_peak_list", str(reference_list),
               "--CSP_scaling_factor", "0.101", "1",
               "--log_file"]
 
-pm_main(arguments)
+#pm_main(arguments)
 
 #case5
 reference_list = data_directory/'case6'/'km_IL1B_PeakMatcherBenchmark_HNCO_1003_filtered.list'
@@ -104,7 +104,7 @@ arguments = [ "--reference_peak_list", str(reference_list),
               "--target_cs_column_names", "w2","w3",
               "--target_peak_list_error", "0.015", "0.0015",
               "--output_directory",str(output_directory),
-              "--expected_fraction_csp", "0.1",
+              "--expected_fraction_csp", "1E-12",
               "--variance_scale_fraction_csp", "1",
               "--expected_max_csp", "0.2",
               "--gradient_convergence", "1E-5",

@@ -126,17 +126,17 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         max_csp = self._max_predicted_dnm
         if self._max_predicted_dnm.shape == (1,):
             max_csp = self._max_predicted_dnm.expand((self.distances.shape[0],1))
-        differential = torch.cat([self._no_csp_distribution.log_prob(max_csp), self._csp_distribution.log_prob(max_csp)]) + self._csp_mixture_weights
-        differential = differential.logsumexp(dim=-1).detach()
-        differential = torch.hstack([self._csp_distribution.log_prob(max_csp),self._non_matching_distribution.log_prob(max_csp).detach()]) #+ self._matching_mixture_weights
+        #differential = torch.cat([self._no_csp_distribution.log_prob(max_csp), self._csp_distribution.log_prob(max_csp)]) + self._csp_mixture_weights
+        #differential = differential.logsumexp(dim=-1).detach()
+        differential = torch.hstack([torch.max(torch.hstack([self._csp_distribution.log_prob(max_csp),self._no_csp_distribution.log_prob(max_csp)]),dim=-1)[0].unsqueeze(-1),self._non_matching_distribution.log_prob(max_csp).detach()]) #+ self._matching_mixture_weights
         differential = differential[:,0:1]-differential[:,1:2]#-math.log(10.0)
         unnormalized_csp_posterior_probabilities = self._loglikelihoodMatrix[:,:,0:2].detach() + self._csp_mixture_weights.detach()
 
         self._csp_posterior_probabilities = unnormalized_csp_posterior_probabilities - unnormalized_csp_posterior_probabilities.logsumexp(dim=-1,keepdim=True)
 
-        #unweighted_matching_loglikelihoods = (self._loglikelihoodMatrix[:,:,0:2] + self._csp_mixture_weights.detach()).logsumexp(dim=-1)
-        unweighted_matching_loglikelihoods = (
-                    self._loglikelihoodMatrix[:, :, 0:2]).logsumexp(dim=-1)
+        unweighted_matching_loglikelihoods = (self._loglikelihoodMatrix[:,:,0:2] + self._csp_mixture_weights.detach()).logsumexp(dim=-1)
+        #unweighted_matching_loglikelihoods = (
+        #            self._loglikelihoodMatrix[:, :, 0:2]).logsumexp(dim=-1)
         #parameter corrected loglikelihoods
 
         final_matching_likelihoods = (torch.stack([unweighted_matching_loglikelihoods,self._loglikelihoodMatrix[:,:,2]],dim=2))
@@ -144,6 +144,8 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
         self._matching_likelihood = final_matching_likelihoods[:,:,0]
         self._match_non_matching_loglikelihoods = final_matching_likelihoods[:,:,1] + differential
+        self.differential = differential
+        #print(f"mixture weights {self._csp_mixture_weights}, differential: {differential}")
 
         distributed_missing_mixture_weights = torch.zeros((self._distances.shape[1]+1,))
         #distributed_missing_mixture_weights[:-1] = self._missing_mixture_weights[0].unsqueeze(-1).detach()
@@ -245,14 +247,15 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         mat[:,:-1].masked_fill_(~candidate_cols, float('-inf'))
         matches_only = mat.softmax(dim=-1)[:,:-1].log()
 
+        fold_cutoff = 20
         competes = (
                     torch.abs(matches_only.unsqueeze(-2) - matches_only.unsqueeze(0).max(dim=1, keepdim=True)[0]) - abs(
-                math.log(20)) < 0).squeeze(1)
+                math.log(fold_cutoff)) < 0).squeeze(1)
 
-        candidate_cols = candidate_cols & competes & (matches_only.exp() > 0.05)
+        candidate_cols = candidate_cols & competes & (matches_only.exp() > 1.0/fold_cutoff)
 
         collisions = candidate_cols.unsqueeze(1) & candidate_cols.unsqueeze(0)
-        collisions_in_range = (torch.abs(matches_only.unsqueeze(-2) - matches_only.unsqueeze(0)) - abs(math.log(10)) < 0)
+        collisions_in_range = (torch.abs(matches_only.unsqueeze(-2) - matches_only.unsqueeze(0)) - abs(math.log(fold_cutoff)) < 0)
         for col in range(log_likelihood_matrix.shape[1]-1):
             temp = torch.nonzero(collisions_in_range[:,:,col])
             unique_rows = torch.unique(temp.flatten())

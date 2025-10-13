@@ -123,7 +123,7 @@ def calculateMaxD2FromCSP(csp: float, scaling_factors: torch.tensor, errors: tor
     distances = csp/scaling_factors
     distances_normalized = distances/errors
     distances_normalized_squared = distances_normalized**2
-    return torch.max(distances_normalized_squared).item()
+    return torch.min(distances_normalized_squared).item()
 def getPeakPositionsFromFile(filename, cs_cols, uncertaintycols=None, fixedError=None):
     df = pd.read_csv(filename,sep="\s+")
     positions = df[cs_cols].to_numpy(dtype=np.float64)

@@ -61,8 +61,8 @@ def calculateMixtureWeights(csp_posterior_probabilities: torch.Tensor,
     csp_mixture_weights = (pseudo_csp_posterior_probabilities*matching_posterior_probabilities.unsqueeze(-1)).detach()
     csp_mixture_weights = (csp_mixture_weights.sum(dim=(0,1)) + (csp_mixture_weight_priors))/(matching_posterior_probabilities.sum() + (csp_mixture_weight_priors).sum())
 
-    if csp_mixture_weights[1] < 1E-3:
-        csp_mixture_weights = torch.tensor([1.0-1E-3,1E-3],dtype=torch.float64)
+    #if csp_mixture_weights[1] < 1E-3:
+    #    csp_mixture_weights = torch.tensor([1.0-1E-3,1E-3],dtype=torch.float64)
 
     assert (1 >= csp_mixture_weights).all() and (csp_mixture_weights >= 0).all()
     return csp_mixture_weights

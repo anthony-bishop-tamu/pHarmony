@@ -154,9 +154,9 @@ def outputResults(matchingProbabilities: np.array,
 
     hcpeaklist_df = highConfidence[["Assignment_ref"]+[column for column in highConfidence.columns if column[-len("_target"):] == "_target" and column != "Assignment_target" ]].copy()
 
-    hcpeaklist_df.rename(columns=lambda c: c.removesuffix("_target").removesuffix("ref"), inplace=True)
+    hcpeaklist_df.rename(columns=lambda c: c.removesuffix("_target").removesuffix("_ref"), inplace=True)
 
-    hcpeaklist_df.to_csv(highConfidenceTransferedPeakList,index=False)
+    hcpeaklist_df.to_csv(highConfidenceTransferedPeakList,index=False,sep='\t')
 
 
 #
