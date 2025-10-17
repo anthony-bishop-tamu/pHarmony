@@ -1,6 +1,6 @@
 
 from ._version import version as __version__
-from .PeakMatcher import MatchPeaks, getPeakPositionsFromFile, NoPeaksFoundError
+from .PeakMatcher import MatchPeaks, getPeakPositionsFromFile, NoPeaksFoundError, calculateMaxD2FromCSP
 from ._log import VERBOSE_LEVEL  # noqa: F401
 import logging
 
