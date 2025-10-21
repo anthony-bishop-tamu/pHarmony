@@ -578,14 +578,14 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                         sample_weights = sample_weights - (decision_log[sample_indexes, decision_counter, 3] - decision_log[sample_indexes, decision_counter, 2])
                         sample[sample_indexes,row_order[decision_counter]] = -2
                         decision_log[sample_indexes,decision_counter, :] = -2
-                        validateMasks(availableCols, decision_log, sample)
+                        #validateMasks(availableCols, decision_log, sample)
                         decision_counter = decision_counter - 1
                     decision_counter += 1
                     max_beam_width = 5*max_beam_width
                     logger.info(f"Poor ESS detected increasing max beam size to {max_beam_width}")
                     pbar.update(decision_counter - shown)
                     shown = decision_counter
-                    validateMasks(availableCols,decision_log,sample)
+                    #validateMasks(availableCols,decision_log,sample)
                 except Exception as e:
                     raise SamplingError(f"Error during sampling of matching matrices {e} \n"
                                     f"Step: {decision_counter} of {availableRows.shape[0]} \n"

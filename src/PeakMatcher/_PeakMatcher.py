@@ -5,6 +5,7 @@ from PeakMatcher.Frechet import Frechet, UniformDistanceSquared
 import logging
 from tqdm import tqdm
 import math
+from PeakMatcher._log import configure_logging
 class SampleSizeToLargeError(Exception):
     pass
 #
@@ -346,7 +347,7 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
                max_predicted_dnm,
                gradient_convergence):
 
-
+    configure_logging(__name__,level="VERBOSE")
     PEAK_MATCHER_LOGGER = logging.getLogger(__name__)
     #intialization
 
