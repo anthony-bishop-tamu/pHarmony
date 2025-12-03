@@ -481,7 +481,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                                    -torch.inf)
             top_cols += active_future_logsumexps.unsqueeze(-1)
 
-            if top_cols.numel()*top_cols.element_size() > 2E9:
+            if (future_logsumexps.numel()*top_cols.element_size()*5 > 5E9):
                 raise ExcessiveBeamSearchError("Internal tensor exceeded approx 2 GB; consider lowering Max CSP")
 
 
