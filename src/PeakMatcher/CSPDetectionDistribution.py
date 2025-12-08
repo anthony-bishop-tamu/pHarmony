@@ -452,7 +452,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         #build structures to use in the looping
         future_availableCols = unique_availableCols.clone().unsqueeze(1).expand(-1,k,-1).clone()
         future_logsumexps = torch.zeros((n_unique_samples,k,max_beam_width),dtype=torch.float32)
-        if future_logsumexps.numel() * future_logsumexps.element_size() > 0.5E9:
+        if max_beam_width*k*n_unique_samples > 250E6:
             raise ExcessiveBeamSearchError("Internal tensor exceeded approx 2 GB; consider lowering Max CSP")
 
         logger.verbose(f"Running Beam Search: unique: {n_unique_samples}, k:{k}, max_beam_width:{max_beam_width}, max_depth:{max_depth}")
@@ -504,7 +504,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
             future_availableCols[unique_sample_indexes,k_indexes,proposed_beam_indexes,:] = future_availableCols[unique_sample_indexes,k_indexes,originating_beam_idx,:]
             future_availableCols[unique_sample_indexes,k_indexes,proposed_beam_indexes,col_idx] = False
             future_availableCols[:,:,:,-1] = True
-            running_probability = future_logsumexps[:, :, :proposed_beam_width].logsumexp(dim=-1).softmax(dim=-1).clone()
+            #running_probability = future_logsumexps[:, :, :proposed_beam_width].logsumexp(dim=-1).softmax(dim=-1).clone()
             current_beam_width = proposed_beam_width
 
         #
