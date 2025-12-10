@@ -149,6 +149,7 @@ def run(args: argparse.Namespace):
                         posteriorMatchingDistribution.csp_mixture_weights.exp().detach().cpu().numpy(),
                         posteriorMatchingDistribution.no_csp_distribution,
                         posteriorMatchingDistribution.csp_distribution,
+                        posteriorMatchingDistribution.non_matching_distribution,
                         distances_squared_normalized.detach(),
                         0.50)
         logger.info(f"Output Directory: {output_directory}")

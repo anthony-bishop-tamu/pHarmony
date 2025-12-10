@@ -49,14 +49,14 @@ class Frechet(torch.distributions.Distribution):
     def param(self):
         return self._param
 class UniformDistanceSquared(torch.distributions.Distribution):
-    arg_constraints = {'_dim': constraints.positive }
-    def __init__(self,dim, validate_args=None):
-        self._dim = dim
+    arg_constraints = {'_omega': constraints.positive }
+    def __init__(self,omega, validate_args=None):
+        self._omega = omega
         super(UniformDistanceSquared, self).__init__(torch.Size(), validate_args=validate_args)
     def log_prob(self, x):
-        return  torch.atleast_1d((self._dim-2)/2 * torch.log(x))
+        return  torch.full_like(x,torch.log(1.0/self._omega).item())
     def clone(self):
-        return UniformDistanceSquared(self._dim.detach().clone())
+        return UniformDistanceSquared(self._omega.detach().clone())
 
 
 

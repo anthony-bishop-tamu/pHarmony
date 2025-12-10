@@ -46,7 +46,7 @@ def initalizeAllComponents(distances, dims):
 
     csp_distribution=Frechet(torch.tensor([2.0],requires_grad=True),torch.tensor([30.0],requires_grad=True))
 
-    non_matching_distribution = UniformDistanceSquared(dim=torch.tensor(dims,dtype=torch.float64))
+    non_matching_distribution = UniformDistanceSquared(omega=torch.tensor([1.0]))
 
 
 

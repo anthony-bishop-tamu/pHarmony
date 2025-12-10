@@ -9,7 +9,7 @@ from torch.profiler import record_function
 import torch.nn.functional as F
 from sklearn.cluster import SpectralClustering, AgglomerativeClustering
 from scipy.cluster.hierarchy import linkage, dendrogram, optimal_leaf_ordering, leaves_list
-from pHarmony.Frechet import Frechet
+from pHarmony.Frechet import Frechet, UniformDistanceSquared
 import math
 class SamplingError(Exception):
     pass
@@ -123,12 +123,12 @@ class MMSampler:
         assert not self._loglikelihoodMatrix[:, :, 2].isnan().any()
 
         max_csp = self._max_predicted_dnm
-        if self._max_predicted_dnm.shape == (1,):
-            max_csp = self._max_predicted_dnm.expand((self.distances.shape[0],1))
+        #if self._max_predicted_dnm.shape == (1,):
+        #    max_csp = self._max_predicted_dnm.expand((self.distances.shape[0],1))
         #differential = torch.cat([self._no_csp_distribution.log_prob(max_csp), self._csp_distribution.log_prob(max_csp)]) + self._csp_mixture_weights
         #differential = differential.logsumexp(dim=-1).detach()
         differential = torch.hstack([torch.max(torch.hstack([self._csp_distribution.log_prob(max_csp),self._no_csp_distribution.log_prob(max_csp)]),dim=-1)[0].unsqueeze(-1),self._non_matching_distribution.log_prob(max_csp).detach()]) #+ self._matching_mixture_weights
-        differential = differential[:,0:1]-differential[:,1:2]#-math.log(10.0)
+        differential = differential[0]-differential[1]#-math.log(10.0)
         unnormalized_csp_posterior_probabilities = self._loglikelihoodMatrix[:,:,0:2].detach() + self._csp_mixture_weights.detach()
 
         self._csp_posterior_probabilities = unnormalized_csp_posterior_probabilities - unnormalized_csp_posterior_probabilities.logsumexp(dim=-1,keepdim=True)
@@ -141,6 +141,7 @@ class MMSampler:
         final_matching_likelihoods = (torch.stack([unweighted_matching_loglikelihoods,self._loglikelihoodMatrix[:,:,2]],dim=2))
                                       #+ self._matching_mixture_weights.detach())
 
+        self._non_matching_distribution = UniformDistanceSquared(omega=self._non_matching_distribution._omega*torch.exp(-differential))
         self._matching_likelihood = final_matching_likelihoods[:,:,0]
         self._match_non_matching_loglikelihoods = final_matching_likelihoods[:,:,1] + differential
         self.differential = differential
@@ -480,7 +481,7 @@ class MMSampler:
                                    -torch.inf)
             top_cols += active_future_logsumexps.unsqueeze(-1)
 
-            if (future_logsumexps.numel()*top_cols.element_size()*5 > 5E9):
+            if (top_cols.numel()*top_cols.element_size()*4 > 1E9):
                 raise ExcessiveBeamSearchError("Internal tensor exceeded approx 2 GB; consider lowering Max CSP")
 
 

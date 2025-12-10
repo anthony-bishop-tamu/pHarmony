@@ -104,7 +104,7 @@ arguments = [ "--reference_peak_list", str(reference_list),
               "--target_cs_column_names", "w2","w3",
               "--target_peak_list_error", "0.015", "0.0015",
               "--output_directory",str(output_directory),
-              "--expected_fraction_csp", "1E-12",
+              "--expected_fraction_csp", "0.1",
               "--variance_scale_fraction_csp", "1",
               "--expected_max_csp", "0.2",
               "--gradient_convergence", "1E-5",
@@ -112,7 +112,7 @@ arguments = [ "--reference_peak_list", str(reference_list),
               "--CSP_scaling_factor", "0.101", "1",
               "--log_file"]
 
-#pm_main(arguments)
+pm_main(arguments)
 
 #case5
 reference_list = data_directory/'case7'/'fitted_not_referenced_471.list'
@@ -134,4 +134,4 @@ arguments = [ "--reference_peak_list", str(reference_list),
               "--CSP_scaling_factor", "0.101", "1",
               "--log_file"]
 
-pm_main(arguments)
+#pm_main(arguments)

@@ -8,6 +8,7 @@ def buildPlot(matchingProbabilities: torch.tensor,
               csp_mixture_weights: np.array,
               no_csp_match_distribution: torch.distributions.Distribution,
               csp_distribution: torch.distributions.Distribution,
+              non_match_distribution: torch.distributions.Distribution,
               distances: torch.tensor,
               confidence_cutoff: float = 0.90):
 
@@ -34,10 +35,10 @@ def buildPlot(matchingProbabilities: torch.tensor,
 
         nocsp_pdf = no_csp_match_distribution.log_prob(bins).exp().detach().numpy()
         csp_pdf = csp_distribution.log_prob(bins).exp().detach().numpy()
-        ax1.plot(bins,nocsp_pdf*csp_mixture_weights[0]*matching_mixture_weights[0],color='red',label='No CSP')
-        ax1.plot(bins,csp_pdf*csp_mixture_weights[1]*matching_mixture_weights[0],color='blue',label='CSP Distribution')
+        ax1.plot(bins,nocsp_pdf*csp_mixture_weights[0]*matching_mixture_weights[0],color='red',label='No CSP distribution - Chi squared ')
+        ax1.plot(bins,csp_pdf*csp_mixture_weights[1]*matching_mixture_weights[0],color='blue',label='CSP Distribution - Frechet')
         ax1.plot(bins,(nocsp_pdf*csp_mixture_weights[0]+csp_pdf*csp_mixture_weights[1])*matching_mixture_weights[0],color='green',label='All matches',linestyle='--')
-       # ax1.plot(bins[1:],non_match_distribution.log_prob(bins[1:]).exp().detach().numpy()*matching_mixture_weights[1],color='orange',label='NonMatchDistribution')
+        ax1.plot(bins[1:],non_match_distribution.log_prob(bins[1:]).exp().detach().numpy(),color='orange',label='non matching - constant')
 
         #log scale plot
         log_bins = np.logspace(-0.5,np.log10(non_matches.max().item()),100)
@@ -58,6 +59,7 @@ def buildPlot(matchingProbabilities: torch.tensor,
        #          label='NonMatchDistribution')
         ax2.plot(log_bins,no_csp_match_distribution.log_prob(torch.from_numpy(log_bins)).exp().detach().numpy()*csp_mixture_weights[0]*matching_mixture_weights[0],color='red',label='No CSP')
         ax2.plot(log_bins,csp_distribution.log_prob(torch.from_numpy(log_bins)).exp().detach().numpy()*csp_mixture_weights[1]*matching_mixture_weights[0],color='blue',label='CSP Distribution')
+        ax2.plot(log_bins,non_match_distribution.log_prob(torch.from_numpy(log_bins)).exp().detach().numpy(),color='orange',label='NonMatchDistribution')
 
         ax2.set_xscale('log')
         ax2.set_yscale('log')
