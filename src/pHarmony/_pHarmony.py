@@ -53,9 +53,9 @@ def initalizeAllComponents(distances, dims):
                                    1.0-matching_probabilities),dim=2)
     initial_weights = (initial_weights - initial_weights.logsumexp(dim=2,keepdim=True)).exp() #enforce normalization for intial weights
 
-    csp_distribution=initialize_csp_distribution(distances[(matching_probabilities.exp() > 0.9) & (csp_conditional_assignments[...,1].exp() > 0.90)])
+    csp_distribution=Frechet(torch.tensor([2.0],requires_grad=True),torch.tensor([30.0],requires_grad=True))
 
-    non_matching_distribution = UniformDistanceSquared(log_prob=-1.0)
+    non_matching_distribution = UniformDistanceSquared(omega=torch.tensor([1.0]))
 
 
 
