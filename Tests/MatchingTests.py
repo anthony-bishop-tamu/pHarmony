@@ -107,7 +107,6 @@ arguments = [ "--reference_peak_list", str(reference_list),
               "--expected_fraction_csp", "0.1",
               "--variance_scale_fraction_csp", "1",
               "--expected_max_csp", "0.2",
-              "--gradient_convergence", "1E-5",
               "--confidence_cutoff", "0.9",
               "--CSP_scaling_factor", '0.252',"0.101", "1",
               "--log_file"]

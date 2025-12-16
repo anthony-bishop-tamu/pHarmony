@@ -46,8 +46,6 @@ def parseArguments():
         parser.add_argument("--expected_max_csp", type=isPositive,
                             help="Estimate of the maximum expected CSP (ppm); Default is in units of proton ppm",
                             default=0.1)
-        parser.add_argument("--gradient_convergence", type=isPositive, help="Gradient convergence criterion",
-                            default=1E-5)
         parser.add_argument("--output_directory", type=Path, help="Directory path to output the results to",
                             default="./peak_matcher_output")
         parser.add_argument("--confidence_cutoff", type=isBetween0And1,
@@ -127,8 +125,7 @@ def run(args: argparse.Namespace):
             target_peak_positions,
             args.expected_fraction_csp,
             args.variance_scale_fraction_csp,
-            max_predicted_dnm,
-            args.gradient_convergence)
+            max_predicted_dnm)
 
         name_stem = f"{args.reference_peak_list.name}_{args.target_peak_list.name}"
         outputResults(matchingProbabilities.numpy(),
