@@ -1,11 +1,11 @@
 import numpy as np
 import torch
-from PeakMatcher.CSPDetectionDistribution import CSPDetectionDistribution
-from PeakMatcher.Frechet import Frechet, UniformDistanceSquared
+from pHarmony.CSPDetectionDistribution import CSPDetectionDistribution
+from pHarmony.Frechet import Frechet, UniformDistanceSquared
 import logging
 from tqdm import tqdm
 import math
-from PeakMatcher._log import configure_logging
+from pHarmony._log import configure_logging
 class SampleSizeToLargeError(Exception):
     pass
 #

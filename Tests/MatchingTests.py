@@ -1,6 +1,6 @@
 import sys, subprocess, shlex, textwrap
 import importlib_resources
-from PeakMatcher.PeakMatcher import main as pm_main
+from pHarmony.PeakMatcher import main as pm_main
 
 
 data_directory =  importlib_resources.files('Tests.TestData')

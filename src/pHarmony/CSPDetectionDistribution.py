@@ -9,7 +9,7 @@ from torch.profiler import record_function
 import torch.nn.functional as F
 from sklearn.cluster import SpectralClustering, AgglomerativeClustering
 from scipy.cluster.hierarchy import linkage, dendrogram, optimal_leaf_ordering, leaves_list
-from PeakMatcher.Frechet import Frechet
+from pHarmony.Frechet import Frechet
 import math
 class SamplingError(Exception):
     pass

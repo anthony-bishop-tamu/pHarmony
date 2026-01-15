@@ -40,7 +40,7 @@ dist/
 *.whl
 
 # setuptools_scm version file (if written to disk)
-src/PeakMatcher/_version.py
+src/pHarmony/_version.py
 
 # VS Code and JetBrains project files
 .vscode/

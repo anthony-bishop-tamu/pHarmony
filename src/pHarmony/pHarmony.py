@@ -4,11 +4,11 @@ import argparse
 import time
 import pandas as pd
 import torch
-from PeakMatcher._PeakMatcher import MatchPeaks
-from PeakMatcher.OutputHandling import outputResults, buildPlot
+from pHarmony._pHarmony import MatchPeaks
+from pHarmony.OutputHandling import outputResults, buildPlot
 import numpy as np
-from PeakMatcher import __version__
-from PeakMatcher._log import configure_logging
+from pHarmony import __version__
+from pHarmony._log import configure_logging
 
 class ArgumentError(Exception):
     pass

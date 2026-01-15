@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0", "setuptools_scm"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "PeakMatcher"
+name = "pHarmony"
 dynamic = ["version"]
-description = "Package for matching peaks changing chemical"
+description = "Package for matching multidimensional NMR peaks"
 requires-python = ">=3.9"
 dependencies = [
     "numpy>=1.24.0",
@@ -28,7 +28,7 @@ version_scheme = "guess-next-dev"
 local_scheme = "node-and-date"
 tag_regex = "^v(?P<version>\\d+\\.\\d+\\.\\d+)$"
 root = "."
-write_to = "src/PeakMatcher/_version.py"
+write_to = "src/pHarmony/_version.py"
 
 [project.scripts]
-PeakMatcher = "PeakMatcher.PeakMatcher:main"
+pHarmony = "pHarmony.pHarmony:main"
