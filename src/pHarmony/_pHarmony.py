@@ -34,31 +34,6 @@ def initialize_csp_distribution(initial_CSP_distances: torch.tensor):
     PEAK_MATCHER_LOGGER = logging.getLogger(__name__)
     return csp_distribution
 
-    for itr in range(n_iterations):
-        def closure():
-            opt.zero_grad(set_to_none=True)
-            loss = -csp_distribution.log_prob(initial_CSP_distances).sum()
-            loss.backward()
-            return loss
-        prev_alpha = csp_distribution.alpha.item()
-        prev_scale = csp_distribution.scale.item()
-        loss = opt.step(closure)
-        PEAK_MATCHER_LOGGER.verbose(
-            "Step=%6d Loss=%12.3e, csp_alpha=%12.3e, csp_scale=%12.3e csp_alpha_grad=%12.3e csp_scale_grad=%12.3e",
-            itr, loss, csp_distribution.alpha.item(), csp_distribution.scale.item(), csp_distribution._alpha_logit.grad.item(), csp_distribution._scale_logit.grad.item())
-        if ((torch.abs(prev_alpha-csp_distribution.alpha).item() <  1e-5 )and
-                (torch.abs(prev_scale-csp_distribution.scale).item() < 1e-5) and
-                (csp_distribution._alpha_logit.grad.norm() < 1E-5) and
-                (csp_distribution._scale_logit.grad.norm() < 1E-5)
-        ):
-            return csp_distribution
-        elif ((torch.abs(prev_alpha-csp_distribution.alpha).item() <  1e-5 ) and
-                (torch.abs(prev_scale-csp_distribution.scale).item() < 1e-5)):
-            opt = torch.optim.LBFGS(params, lr=1E-2, history_size=10, max_iter=100)
-
-    #
-    return csp_distribution
-
 def initalizeAllComponents(distances, dims):
     csp_conditional_assignments = torch.ones_like(distances)*0.05
     csp_conditional_assignments[distances < 3] = 0.95
@@ -80,7 +55,7 @@ def initalizeAllComponents(distances, dims):
 
     csp_distribution=initialize_csp_distribution(distances[(matching_probabilities.exp() > 0.9) & (csp_conditional_assignments[...,1].exp() > 0.90)])
 
-    non_matching_distribution = UniformDistanceSquared(omega=torch.tensor([1.0]))
+    non_matching_distribution = UniformDistanceSquared(log_prob=-1.0)
 
 
 
@@ -172,7 +147,7 @@ def maximization(samples: tuple,
     PEAK_MATCHER_LOGGER = logging.getLogger(__name__)
     # optimizer = torch.optim.Adam([csp_assignment_params, csp_distribution_params], lr=1E-3)
     csp_distribution = dist.csp_distribution
-    optimizer = torch.optim.LBFGS(csp_distribution._params, lr=1,line_search_fn='strong_wolfe')
+    optimizer = torch.optim.LBFGS(csp_distribution._params, lr=1,line_search_fn='strong_wolfe',history_size=100,max_iter=200,tolerance_change=0)
     maxIterators = 1000
     prevLoss = torch.finfo(torch.float64).max
     previous_alpha = csp_distribution.alpha.detach().clone()
@@ -181,9 +156,10 @@ def maximization(samples: tuple,
     for itr in tqdm(range(maxIterators),desc="Optimizing Parameters", total=maxIterators):
         prev_alpha = csp_distribution.alpha.item()
         prev_scale = csp_distribution.scale.item()
+        prev_params = [csp_distribution._params[0].detach().clone(), csp_distribution._params[1].detach().clone()]
+        dist._detach()
         def closure():
             optimizer.zero_grad(set_to_none=True)
-            dist._detach()
             loss = EM_minimization_function(samples, dist,
                                         csp_mixture_priors,
                                         max_predicted_dm)
@@ -195,7 +171,23 @@ def maximization(samples: tuple,
             "Step=%6d Loss=%12.3e, csp_alpha=%12.3e, csp_scale=%12.3e csp_alpha_grad=%12.3e csp_scale_grad=%12.3e",
             itr, loss, csp_distribution.alpha.item(), csp_distribution.scale.item(),
             csp_distribution._alpha_logit.grad.item(), csp_distribution._scale_logit.grad.item())
-        if ((torch.abs(prev_alpha - csp_distribution.alpha).item() < 1e-5) and
+        if ~csp_distribution.alpha.isfinite().all() or ~csp_distribution.scale.isfinite().all() or (loss-prevLoss > 1E-3):
+            with torch.no_grad():
+                csp_distribution._alpha_logit.copy_(prev_params[0])
+                csp_distribution._scale_logit.copy_(prev_params[1])
+            old_params = optimizer.param_groups[0]
+            optimizer = torch.optim.LBFGS(csp_distribution._params,
+                                          lr=old_params['lr']/2.0,
+                                          line_search_fn='strong_wolfe',
+                                          history_size=5,
+                                          max_iter=5,
+                                          tolerance_change=old_params['tolerance_change'])
+            PEAK_MATCHER_LOGGER.verbose(f"Decreasing learning rate to {optimizer.param_groups[0]['lr']}")
+            if optimizer.param_groups[0]['lr'] < 1E-3:
+                break
+            continue
+
+        elif ((torch.abs(prev_alpha - csp_distribution.alpha).item() < 1e-5) and
                 (torch.abs(prev_scale - csp_distribution.scale).item() < 1e-5) and
                 (csp_distribution._alpha_logit.grad.norm() < 1E-5) and
                 (csp_distribution._scale_logit.grad.norm() < 1E-5)
@@ -203,10 +195,12 @@ def maximization(samples: tuple,
             return dist
         elif ((torch.abs(prev_alpha - csp_distribution.alpha).item() < 1e-5) and
               (torch.abs(prev_scale - csp_distribution.scale).item() < 1e-5)):
-            if line_search_off:
-                return dist
-            opt = torch.optim.LBFGS(csp_distribution._params, lr=1E-2, history_size=10, max_iter=100)
+
+            PEAK_MATCHER_LOGGER.verbose("Line search switched off")
+            optimizer = torch.optim.LBFGS(csp_distribution._params, lr=optimizer.param_groups[0]['lr'], history_size=100, max_iter=200,tolerance_change=0)
             line_search_off = True
+        prevLoss = loss.item()
+
 
     return dist
 def runEMStep(distances: torch.tensor,

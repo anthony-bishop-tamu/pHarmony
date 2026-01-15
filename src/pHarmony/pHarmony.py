@@ -150,7 +150,7 @@ def run(args: argparse.Namespace):
                         distances_squared_normalized.detach(),
                         0.50)
         logger.info(f"Output Directory: {output_directory}")
-        fig.savefig(output_directory / f"{name_stem}_fittedDistributions.png")
+        fig.savefig(output_directory / f"{name_stem}_fittedDistributions.svg",bbox_inches='tight')
         logger.info("Done")
         end_time = time.time()
         elapsed_time = end_time - start_time

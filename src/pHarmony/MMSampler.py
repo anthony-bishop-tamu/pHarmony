@@ -111,6 +111,12 @@ class MMSampler:
                          self._non_matching_distribution.clone())
 
     def _calculateDecisionLogLikelihood(self):
+        max_csp = self._max_predicted_dnm
+        non_matching_log_prob = \
+        torch.max(torch.hstack([self._csp_distribution.log_prob(max_csp), self._no_csp_distribution.log_prob(max_csp)]),
+                  dim=-1)[0].item()  # + self._matching_mixture_weights
+        self._non_matching_distribution = UniformDistanceSquared(log_prob=non_matching_log_prob)
+
         self._loglikelihoodMatrix = torch.stack((self._no_csp_distribution.log_prob(self._distances).clamp(min=self.min_float64),
                                                 self._csp_distribution.log_prob(self._distances).clamp(min=self.min_float64),
                                                 self._non_matching_distribution.log_prob(self._distances).clamp(min=self.min_float64)),dim=2)
@@ -122,32 +128,16 @@ class MMSampler:
         assert not self._loglikelihoodMatrix[:, :,  1].isnan().any()
         assert not self._loglikelihoodMatrix[:, :, 2].isnan().any()
 
-        max_csp = self._max_predicted_dnm
-        #if self._max_predicted_dnm.shape == (1,):
-        #    max_csp = self._max_predicted_dnm.expand((self.distances.shape[0],1))
-        #differential = torch.cat([self._no_csp_distribution.log_prob(max_csp), self._csp_distribution.log_prob(max_csp)]) + self._csp_mixture_weights
-        #differential = differential.logsumexp(dim=-1).detach()
-        differential = torch.hstack([torch.max(torch.hstack([self._csp_distribution.log_prob(max_csp),self._no_csp_distribution.log_prob(max_csp)]),dim=-1)[0].unsqueeze(-1),self._non_matching_distribution.log_prob(max_csp).detach()]) #+ self._matching_mixture_weights
-        differential = differential[0]-differential[1]#-math.log(10.0)
         unnormalized_csp_posterior_probabilities = self._loglikelihoodMatrix[:,:,0:2].detach() + self._csp_mixture_weights.detach()
 
         self._csp_posterior_probabilities = unnormalized_csp_posterior_probabilities - unnormalized_csp_posterior_probabilities.logsumexp(dim=-1,keepdim=True)
 
-        unweighted_matching_loglikelihoods = (self._loglikelihoodMatrix[:,:,0:2] + self._csp_mixture_weights.detach()).logsumexp(dim=-1)
-        #unweighted_matching_loglikelihoods = (
-        #            self._loglikelihoodMatrix[:, :, 0:2]).logsumexp(dim=-1)
-        #parameter corrected loglikelihoods
+        matching_loglikelihoods = (self._loglikelihoodMatrix[:,:,0:2] + self._csp_mixture_weights.detach()).logsumexp(dim=-1)
 
-        final_matching_likelihoods = (torch.stack([unweighted_matching_loglikelihoods,self._loglikelihoodMatrix[:,:,2]],dim=2))
-                                      #+ self._matching_mixture_weights.detach())
-
-        self._non_matching_distribution = UniformDistanceSquared(omega=self._non_matching_distribution._omega*torch.exp(-differential))
-        self._matching_likelihood = final_matching_likelihoods[:,:,0]
-        self._match_non_matching_loglikelihoods = final_matching_likelihoods[:,:,1] + differential
-        self.differential = differential
+        self._matching_likelihood = matching_loglikelihoods
+        self._match_non_matching_loglikelihoods = self._loglikelihoodMatrix[:,:,2]
         #print(f"mixture weights {self._csp_mixture_weights}, differential: {differential}")
 
-        distributed_missing_mixture_weights = torch.zeros((self._distances.shape[1]+1,))
         #distributed_missing_mixture_weights[:-1] = self._missing_mixture_weights[0].unsqueeze(-1).detach()
         #distributed_missing_mixture_weights[:-1] = (self._missing_mixture_weights[0].unsqueeze(-1).exp().detach() / len(
         #    distributed_missing_mixture_weights[:-1])).log()
@@ -156,7 +146,6 @@ class MMSampler:
         self._base_row_decision_likelihoods= torch.zeros((self._distances.shape[0],self._distances.shape[1]+1),dtype=torch.float64)
         self._base_row_decision_likelihoods[:,:] = self._match_non_matching_loglikelihoods.detach().sum(dim=-1).unsqueeze(1)
         self._base_row_decision_likelihoods[:,:-1] += self._matching_likelihood.detach() - self._match_non_matching_loglikelihoods.detach()
-        self._base_row_decision_likelihoods += distributed_missing_mixture_weights.unsqueeze(0).detach()
         self._base_row_decision_likelihoods_unnormalized = self._base_row_decision_likelihoods.clone()
 
 

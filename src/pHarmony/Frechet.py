@@ -2,8 +2,8 @@ import torch
 from torch.distributions import constraints
 class Frechet(torch.distributions.Distribution):
     def __init__(self, alpha_logit, scale_logit, alpha_min, scale_min, validate_args=False):
-        self._alpha_logit = alpha_logit.requires_grad_(True)  # Shape parameter (fitted_c from SciPy)
-        self._scale_logit = scale_logit.requires_grad_(True) # Scale parameter (fitted_scale from SciPy)
+        self._alpha_logit = alpha_logit.detach().clone().requires_grad_(True)  # Shape parameter (fitted_c from SciPy)
+        self._scale_logit = scale_logit.detach().clone().requires_grad_(True) # Scale parameter (fitted_scale from SciPy)
         self._alpha_min = alpha_min
         self._scale_min = scale_min
         self._params = [self._alpha_logit,self._scale_logit]
@@ -50,14 +50,17 @@ class Frechet(torch.distributions.Distribution):
     def param(self):
         return self._param
 class UniformDistanceSquared(torch.distributions.Distribution):
-    arg_constraints = {'_omega': constraints.positive }
-    def __init__(self,omega, validate_args=None):
-        self._omega = omega
-        super(UniformDistanceSquared, self).__init__(torch.Size(), validate_args=validate_args)
+    def __init__(self,log_prob):
+        self._log_prob = log_prob
+        super(UniformDistanceSquared, self).__init__(torch.Size(), validate_args=False)
+    @property
+    def log_omega(self):
+        return torch.tensor([1.0],dtype=torch.float).log() - self._log_prob
+
     def log_prob(self, x):
-        return  torch.full_like(x,torch.log(1.0/self._omega).item())
+        return  torch.full_like(x,self._log_prob)
     def clone(self):
-        return UniformDistanceSquared(self._omega.detach().clone())
+        return UniformDistanceSquared(self._log_prob)
 
 
 
