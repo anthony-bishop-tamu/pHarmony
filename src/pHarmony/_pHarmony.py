@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from pHarmony.CSPDetectionDistribution import CSPDetectionDistribution
+from pHarmony.MMSampler import MMSampler
 from pHarmony.Frechet import Frechet, UniformDistanceSquared
 import logging
 from tqdm import tqdm
@@ -103,7 +103,7 @@ def calculateCSPDistParameters(quantile, cutoff, median):
     lam = median/torch.pow(torch.log(torch.tensor([2.0])),1.0/k)
     return torch.tensor([k,lam],dtype=torch.float64)
 #
-def EM_minimization_function(samples, dist: CSPDetectionDistribution,
+def EM_minimization_function(samples, dist: MMSampler,
                              csp_mixture_priors: torch.Tensor,
                              max_predicted_dnm: float):
 
@@ -125,7 +125,7 @@ def EM_minimization_function(samples, dist: CSPDetectionDistribution,
     return loss
 #
 def maximization(samples: tuple,
-                 dist: CSPDetectionDistribution,
+                 dist: MMSampler,
                  csp_mixture_priors: torch.tensor,
                  max_predicted_dm: float,
                  learning_rate: float,
@@ -187,7 +187,7 @@ def maximization(samples: tuple,
     #
     return dist
 def runEMStep(distances: torch.tensor,
-              dist: CSPDetectionDistribution,
+              dist: MMSampler,
               csp_mixture_priors: torch.tensor,
               max_predicted_dnm: float,
               sampleSize: int,
@@ -236,12 +236,12 @@ def runEM(distances_squared_normalized: torch.tensor,
     csp_distribution = initial_csp_distribution
     non_matching_distribution = initial_non_matching_distribution
 
-    dist = CSPDetectionDistribution(distances_squared_normalized,
-                                    ndim,
-                                    torch.tensor([max_predicted_dnm],dtype=torch.float),
-                                    csp_mixture_weights,
-                                    csp_distribution,
-                                    non_matching_distribution)
+    dist = MMSampler(distances_squared_normalized,
+                     ndim,
+                     torch.tensor([max_predicted_dnm],dtype=torch.float),
+                     csp_mixture_weights,
+                     csp_distribution,
+                     non_matching_distribution)
 
     inital_sample = determineSampleSize(distances_squared_normalized.shape[0],dist)
     sampleSize = len(inital_sample)
@@ -315,14 +315,14 @@ def calculateReferencePeakDistances(reference_peak_positions: torch.Tensor, csp_
     distances_squared  = (reference_peak_positions.unsqueeze(0) - reference_peak_positions.unsqueeze(1))/csp_scaling_factors.unsqueeze(0).unsqueeze(0)
     distances_squared = torch.square(distances_squared).sum(dim=-1)
     return torch.sqrt(distances_squared)
-def determineSampleSize(startingSample: int,dist: CSPDetectionDistribution):
+def determineSampleSize(startingSample: int, dist: MMSampler):
     PEAK_MATCHER_LOGGER = logging.getLogger(__name__)
     if isinstance(startingSample,int):
-        startingSample = dist.sample((startingSample,))
+        startingSample = dist.sample(startingSample)
     #
     size = startingSample.shape[0]
     sample1 = startingSample
-    sample2 = dist.sample((size,))
+    sample2 = dist.sample(size)
     PEAK_MATCHER_LOGGER.info(f"Validating Sample Size: {size} ")
     maxTries = 6
     i = 1
@@ -333,8 +333,8 @@ def determineSampleSize(startingSample: int,dist: CSPDetectionDistribution):
                 f"Stopped at sample size {size}: sample variance is still too high, likely due to inefficent beam searching; consider reducing expected max CSP")
 
         PEAK_MATCHER_LOGGER.info(f"Increasing Sample Size to: {size}")
-        sample1 = dist.sample((int(size),))
-        sample2 = dist.sample((int(size),))
+        sample1 = dist.sample(int(size))
+        sample2 = dist.sample(int(size))
         i += 1
     #
     PEAK_MATCHER_LOGGER.info(f"New sample size {size}")

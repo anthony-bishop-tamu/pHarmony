@@ -73,7 +73,7 @@ def validateMasks(colMask: torch.tensor, decision_log: torch.tensor, sample: tor
 
 
 
-class CSPDetectionDistribution(torch.distributions.Distribution):
+class MMSampler:
     arg_constraints = {}
     def __init__(self, distances: torch.tensor,
                  ndim: int,
@@ -81,7 +81,6 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
                  csp_mixture_weights: torch.tensor,
                  csp_distribution: torch.distributions.Distribution,
                  non_matching_distribution: torch.distributions.Distribution):
-        super().__init__()
         #assert(distances.shape[0] >= distances.shape[1])
         assert((2,) == csp_mixture_weights.shape)
         self._ndim = ndim
@@ -104,12 +103,12 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
     #
     def clone(self):
-        return CSPDetectionDistribution(self._distances.detach().clone(),
-                                        self._ndim,
-                                        self._max_predicted_dnm,
-                                        self.csp_mixture_weights.detach().clone(),
-                                        self._csp_distribution.clone(),
-                                        self._non_matching_distribution.clone())
+        return MMSampler(self._distances.detach().clone(),
+                         self._ndim,
+                         self._max_predicted_dnm,
+                         self.csp_mixture_weights.detach().clone(),
+                         self._csp_distribution.clone(),
+                         self._non_matching_distribution.clone())
 
     def _calculateDecisionLogLikelihood(self):
         self._loglikelihoodMatrix = torch.stack((self._no_csp_distribution.log_prob(self._distances).clamp(min=self.min_float64),
@@ -538,7 +537,7 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
         return torch.from_numpy(ordered_indexes), max_depths, neighbor_count
 
     #
-    def _sample(self, sample_shape=torch.Size()) -> torch.tensor:
+    def _sample(self, sample_shape) -> torch.tensor:
         availableRows = torch.ones(sample_shape+(self._distances.shape[0],), dtype=torch.bool)
         availableCols = torch.ones(sample_shape+(self._distances.shape[1]+1,), dtype=torch.bool)
         sample = torch.full(sample_shape+self._event_shape, -2, dtype=torch.int32)
@@ -600,7 +599,8 @@ class CSPDetectionDistribution(torch.distributions.Distribution):
 
 
 
-    def sample(self,sample_shape=torch.Size()) -> torch.tensor:
+    def sample(self,n_samples: int) -> torch.tensor:
+        sample_shape = (n_samples,)
         while True:
             try:
                 sample, sample_indexes, avaliableRows,availableCols,decision_log,gibbs_sample = self._sample(sample_shape)
