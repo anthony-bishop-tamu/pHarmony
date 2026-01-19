@@ -37,8 +37,7 @@ conda activate pHarmony
 Install via HTTPS 
 
 ```bash
-pip install git+https://github.com/anthony-bishop-tamu/pHarmony.git@v1.3.5  
-
+pip install git+https://github.com/anthony-bishop-tamu/pHarmony.git@main  
 # pip install git+https://github.com/anthony-bishop-tamu/pHarmony.git@v1.3.5 is the version at the time of publishing
 # pip install git+https://github.com/anthony-bishop-tamu/pHarmony.git@main for the latest stable release
 ```
