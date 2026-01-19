@@ -34,16 +34,13 @@ conda activate pHarmony
 
 ### 3) Install `pHarmony`
 
-#### Option A: Install via SSH (recommended)
+Install via HTTPS 
 
 ```bash
-pip install git+ssh://git@github.com/anthony-bishop-tamu/pHarmony.git
-```
+pip install git+https://github.com/anthony-bishop-tamu/pHarmony.git@v1.3.5  
 
-#### Option B: Install via HTTPS (no SSH keys required)
-
-```bash
-pip install git+https://github.com/anthony-bishop-tamu/pHarmony.git
+# pip install git+https://github.com/anthony-bishop-tamu/pHarmony.git@v1.3.5 is the version at the time of publishing
+# pip install git+https://github.com/anthony-bishop-tamu/pHarmony.git@main for the latest stable release
 ```
 
 ---
@@ -86,6 +83,7 @@ pHarmony    --reference_peak_list reference.list \
 ### --expected_fraction_csp : default 0.1 - Prior estimate of the fraction of matched peaks that undergo a CSP (Keep under 0.5)
 ### --variance_scale_fraction_csp: default 2 - Scaling factor to create Beta prior variance: variance = variance_scale_fraction_csp*expected_fraction_csp**2
 ### --expected_max_csp: Expected maximum chemical shift: default 0.1 ppm (good for proton-detected experiments) (in ppm of the dimension with the lowest uncertainty)
+###  if this is set too large, sampling might become extremely slow
 ### --log_file: flag for including log file
 ### --gradient_convergence : Threshold of parameter gradient norms to determine convergence during optimization
 
