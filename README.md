@@ -60,10 +60,10 @@ Be sure the conda environment is active to run pHarmony
 ```bash
 pHarmony    --reference_peak_list reference.list \ 
             --reference_cs_column_names w2 w3 \
-            --reference_peak_list_error 0.03 0.003 \
+            --reference_peak_list_error 0.015 0.0015 \
             --target_peak_list target.list \
             --target_cs_column_names w2 w3 \
-            --target_peak_list_error 0.03 0.003 \
+            --target_peak_list_error 0.015 0.0015 \
             --output_directory $3
             
             
