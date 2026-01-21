@@ -64,7 +64,7 @@ pHarmony    --reference_peak_list reference.list \
             --target_peak_list target.list \
             --target_cs_column_names w2 w3 \
             --target_peak_list_error 0.015 0.0015 \
-            --output_directory $3
+            --output_directory output_directory
             
             
 ### --reference_peak_list : A sparky formatted peak list
@@ -146,9 +146,9 @@ gradient norms must be below this number (1E-6 is a reasonable value)
 
 #### sampler: MMSampler
 - This is an MMSampler (custom matching matrix sampler) object, parameterized with the EM optimized distributions
-- You can draw your own sample of shape (number of samples, number of reference peaks) a torch tensor of type int
-each entry corresponds to the index of the matched target column (-1 indicates no match
--sample by calling
+- You can draw your own sample which is a a torch tensor of type int of shape (number of samples, number of reference peaks) 
+- each entry corresponds to the index of the matched target column (-1 indicates no match)
+- sample by calling
 ```python
 my_sample = sampler.sample(number_of_samples) #where number_of_samples is an int
 ```
