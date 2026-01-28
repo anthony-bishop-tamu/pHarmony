@@ -8,7 +8,7 @@
 
 The following packages are required:
 
-- `numpy>=1.24.0`
+- `numpy>=1.24.0,<2 #Issue with dependencies on some platforms requiring 1`
 - `pandas>=2.0`
 - `torch>=2.0`
 - `matplotlib>=3.2`
