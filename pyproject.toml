@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "Package for matching multidimensional NMR peaks"
 requires-python = ">=3.9"
 dependencies = [
-    "numpy>=1.24.0",
+    "numpy>=1.24.0,<2",
     "pandas>=2.0 ",
     "torch>=2.0",
     "matplotlib>=3.2",
