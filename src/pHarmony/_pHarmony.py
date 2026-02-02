@@ -133,7 +133,6 @@ def EM_minimization_function(samples, dist: MMSampler,
     else:
         sharpness_reg = 0
     beta_regularization = -1*torch.distributions.Beta(csp_mixture_priors[0],csp_mixture_priors[1]).log_prob(csp_mixture_weights[1])
-    print(f"Beta regularization: {beta_regularization}")
     loss = -1 * logLikelihoodTerm + sharpness_reg + beta_regularization
 
     assert loss.isfinite().all()
@@ -225,6 +224,7 @@ def runEMStep(distances: torch.tensor,
                      csp_mixture_priors,
                      max_predicted_dnm)
 
+        dist.csp_mixture_weights = csp_mixture_weights.log()
 
 
 
