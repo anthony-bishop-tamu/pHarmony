@@ -17,11 +17,12 @@ def calculateBetaParametersFromMeanAndVariance(mean, variance):
     assert 0 < mean and mean < 1
     assert 0 < variance
     mu = ((mean*(1-mean))/variance - 1)
+
+    mu = max(max(1/mean,1/(1-mean)),mu)
+
     alpha = mean*mu
     beta = (1-mean)*mu
 
-    alpha = max(1.0,alpha)
-    beta = max(1.0,beta)
 
     return torch.tensor([alpha, beta],dtype=torch.float64)
 def initalizeAllComponents(distances, dims):
@@ -60,7 +61,7 @@ def calculateMixtureWeights(csp_posterior_probabilities: torch.Tensor,
     pseudo_csp_posterior_probabilities = csp_posterior_probabilities.exp().clone()
 
     csp_mixture_weights = (pseudo_csp_posterior_probabilities*matching_posterior_probabilities.unsqueeze(-1)).detach()
-    csp_mixture_weights = (csp_mixture_weights.sum(dim=(0,1)) + (csp_mixture_weight_priors))/(matching_posterior_probabilities.sum() + (csp_mixture_weight_priors).sum())
+    csp_mixture_weights = (csp_mixture_weights.sum(dim=(0,1)) + (csp_mixture_weight_priors)-1)/(matching_posterior_probabilities.sum() + (csp_mixture_weight_priors).sum()-2)
 
     #if csp_mixture_weights[1] < 1E-3:
     #    csp_mixture_weights = torch.tensor([1.0-1E-3,1E-3],dtype=torch.float64)
