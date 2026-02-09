@@ -98,18 +98,18 @@ target_list = data_directory/'case6'/'km_IL1B_PeakMatcherBenchmark_HNCO_1073_fil
 output_directory = data_directory/'case6'/"test_output"
 
 arguments = [ "--reference_peak_list", str(reference_list),
-              "--reference_cs_column_names", 'w2','w3',
-              "--reference_peak_list_error", "0.015", "0.0015",
+              "--reference_cs_column_names", 'w1','w2','w3',
+              "--reference_peak_list_error", '0.006',"0.015", "0.0015",
               "--target_peak_list", str(target_list),
-              "--target_cs_column_names", "w2","w3",
-              "--target_peak_list_error", "0.015", "0.0015",
+              "--target_cs_column_names", 'w1',"w2","w3",
+              "--target_peak_list_error", '0.006',"0.015", "0.0015",
               "--output_directory",str(output_directory),
               "--expected_fraction_csp", "0.1",
               "--variance_scale_fraction_csp", "1",
               "--expected_max_csp", "0.2",
               "--gradient_convergence", "1E-5",
               "--confidence_cutoff", "0.9",
-              "--CSP_scaling_factor", "0.101", "1",
+              "--CSP_scaling_factor", '0.252',"0.101", "1",
               "--log_file"]
 
 pm_main(arguments)

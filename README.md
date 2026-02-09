@@ -38,7 +38,7 @@ Install via HTTPS
 
 ```bash
 pip install git+https://github.com/anthony-bishop-tamu/pHarmony.git@main  
-# pip install git+https://github.com/anthony-bishop-tamu/pHarmony.git@v1.3.7 is the version at the time of publishing
+# pip install git+https://github.com/anthony-bishop-tamu/pHarmony.git@v1.3.8 is the version at the time of publishing
 # pip install git+https://github.com/anthony-bishop-tamu/pHarmony.git@main for the latest stable release
 ```
 
