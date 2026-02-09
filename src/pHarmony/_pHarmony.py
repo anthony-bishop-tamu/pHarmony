@@ -146,7 +146,7 @@ def maximization(samples: tuple,
     PEAK_MATCHER_LOGGER = logging.getLogger(__name__)
     # optimizer = torch.optim.Adam([csp_assignment_params, csp_distribution_params], lr=1E-3)
     csp_distribution = dist.csp_distribution
-    optimizer = torch.optim.LBFGS(csp_distribution._params, lr=1,line_search_fn='strong_wolfe',history_size=100,max_iter=200,tolerance_change=0)
+    optimizer = torch.optim.LBFGS(csp_distribution._params, lr=0.1,line_search_fn='strong_wolfe',history_size=100,max_iter=200,tolerance_change=0)
     maxIterators = 1000
     prevLoss = torch.finfo(torch.float64).max
     previous_alpha = csp_distribution.alpha.detach().clone()
@@ -165,7 +165,23 @@ def maximization(samples: tuple,
             loss.backward()
             return loss
         #
-        loss = optimizer.step(closure)
+        try:
+            loss = optimizer.step(closure)
+        except Exception as e:
+            with torch.no_grad():
+                csp_distribution._alpha_logit.copy_(prev_params[0])
+                csp_distribution._scale_logit.copy_(prev_params[1])
+            old_params = optimizer.param_groups[0]
+            optimizer = torch.optim.LBFGS(csp_distribution._params,
+                                          lr=old_params['lr'] / 2.0,
+                                          line_search_fn='strong_wolfe',
+                                          history_size=5,
+                                          max_iter=5,
+                                          tolerance_change=old_params['tolerance_change'])
+            PEAK_MATCHER_LOGGER.verbose(f"Decreasing learning rate to {optimizer.param_groups[0]['lr']}")
+            if optimizer.param_groups[0]['lr'] < 1E-3:
+                break
+            continue
         PEAK_MATCHER_LOGGER.verbose(
             "Step=%6d Loss=%12.3e, csp_alpha=%12.3e, csp_scale=%12.3e csp_alpha_grad=%12.3e csp_scale_grad=%12.3e",
             itr, loss, csp_distribution.alpha.item(), csp_distribution.scale.item(),
