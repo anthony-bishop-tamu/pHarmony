@@ -578,7 +578,7 @@ class MMSampler:
                 except Exception as e:
                     raise SamplingError(f"Error during sampling of matching matrices {e} \n"
                                     f"Step: {decision_counter} of {availableRows.shape[0]} \n"
-                                    f"CSP Distribution Parameters: {self.csp_distribution.param} \n"
+                                    f"CSP Distribution Parameters: {self.csp_distribution.alpha}, {self.csp_distribution.scale} \n"
                                     f"CSP_weight logits: {self._csp_mixture_weights} probits: {(self._csp_mixture_weights-self._csp_mixture_weights.logsumexp(dim=0,keepdim=True)).exp()}\n") from e
                                     #f"matching_weight_logits: {self._matching_mixture_weights} probits: {(self._matching_mixture_weights - self._matching_mixture_weights.logsumexp(dim=0,keepdim=True)).exp()}\n") from e
                                     #f"missing_weight_logits: {self._missing_mixture_weights} probits: {(self._missing_mixture_weights - self._missing_mixture_weights.logsumexp(dim=0,keepdim=True)).exp()}\n") from e
