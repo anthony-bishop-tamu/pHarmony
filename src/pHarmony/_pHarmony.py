@@ -6,12 +6,10 @@ import logging
 from tqdm import tqdm
 import math
 from pHarmony._log import configure_logging
+import warnings
 class SampleSizeToLargeError(Exception):
     pass
 #
-class EMConvergenceFailureError(Exception):
-    pass
-
 
 def calculateBetaParametersFromMeanAndVariance(mean, variance):
     assert 0 < mean and mean < 1
@@ -20,8 +18,8 @@ def calculateBetaParametersFromMeanAndVariance(mean, variance):
 
     mu = max(max(1/mean,1/(1-mean)),mu)
 
-    alpha = mean*mu
-    beta = (1-mean)*mu
+    alpha = (1-mean)*mu
+    beta = mean*mu
 
 
     return torch.tensor([alpha, beta],dtype=torch.float64)
@@ -61,10 +59,13 @@ def calculateMixtureWeights(csp_posterior_probabilities: torch.Tensor,
     pseudo_csp_posterior_probabilities = csp_posterior_probabilities.exp().clone()
 
     csp_mixture_weights = (pseudo_csp_posterior_probabilities*matching_posterior_probabilities.unsqueeze(-1)).detach()
-    csp_mixture_weights = (csp_mixture_weights.sum(dim=(0,1)) + (csp_mixture_weight_priors)-1)/(matching_posterior_probabilities.sum() + (csp_mixture_weight_priors).sum()-2)
+    csp_mixture_weights = csp_mixture_weights.sum(dim=(0,1))
+    alpha = (csp_mixture_weights[0] + csp_mixture_weight_priors[0] - 1)/(csp_mixture_weights.sum() + csp_mixture_weight_priors.sum() - 2)
 
     #if csp_mixture_weights[1] < 1E-3:
     #    csp_mixture_weights = torch.tensor([1.0-1E-3,1E-3],dtype=torch.float64)
+
+    csp_mixture_weights = torch.tensor([alpha,1.0-alpha],dtype=torch.float32)
 
     assert (1 >= csp_mixture_weights).all() and (csp_mixture_weights >= 0).all()
     return csp_mixture_weights
@@ -108,7 +109,8 @@ def EM_minimization_function(samples, dist: MMSampler,
                              csp_mixture_priors: torch.Tensor,
                              max_predicted_dnm: float):
 
-    csp_mixture_weights = dist.csp_mixture_weights
+    csp_mixture_weights = dist.csp_mixture_weights.exp()
+
 
     logLikelihoodTerm = dist.log_prob(samples).sum()
 
@@ -119,9 +121,10 @@ def EM_minimization_function(samples, dist: MMSampler,
         sharpness_reg = (torch.relu(dist.min_alpha - dist.csp_distribution.alpha)*10)**6
     else:
         sharpness_reg = 0
-    loss = (-1 * logLikelihoodTerm +
-            -1*((csp_mixture_priors-1.0)*csp_mixture_weights).sum() +
-            sharpness_reg)
+    beta_regularization = -1*torch.distributions.Beta(csp_mixture_priors[0],csp_mixture_priors[1]).log_prob(csp_mixture_weights[1])
+    print(f"Beta regularization: {beta_regularization}")
+    loss = -1 * logLikelihoodTerm + sharpness_reg + beta_regularization
+
     assert loss.isfinite().all()
     return loss
 #
@@ -202,6 +205,7 @@ def runEMStep(distances: torch.tensor,
         # Calculate new mixture weights
         csp_mixture_weights = calculateMixtureWeights(dist.csp_posterior_probabilities,positionProbs,csp_mixture_priors)
 
+        dist.csp_mixture_weights = csp_mixture_weights.log()
         n_csps = max(5.0,(dist.csp_posterior_probabilities.softmax(dim=-1)[...,1] * positionProbs).sum().item())
         dist.csp_distribution = Frechet(dist.csp_distribution.alpha,dist.csp_distribution.scale)
         #maximization step
@@ -212,7 +216,6 @@ def runEMStep(distances: torch.tensor,
                      learning_rate,
                      gradient_convergence)
 
-        dist.csp_mixture_weights = csp_mixture_weights.log()
 
 
 
@@ -263,31 +266,31 @@ def runEM(distances_squared_normalized: torch.tensor,
         sampleSize = len(samples)
 
         matching_probs = calculatePositionProb(samples, distances_squared_normalized.shape).detach()
-        PEAK_MATCHER_LOGGER.info("CSP posterior convergence")
-        csp_distribution_converged, csp_mean, csp_max = verifyTensorConvergence(dist.csp_posterior_probabilities.exp()[:,:,1]*matching_probs,
-                                                                                previous_dist.csp_posterior_probabilities.exp()[:,:,1]*matching_probs,
-                                                                                0.05,
-                                                                                0.05)
-        PEAK_MATCHER_LOGGER.info("Matching posterior convergence")
-        nonMatching_distribution_converged, nonMatching_mean, nonMatching_max = verifyTensorConvergence(
-            previous_matching_probs,
-            matching_probs,
-            0.05,
-            0.10)
-#        PEAK_MATCHER_LOGGER.info("CSP distribution convergece")
-        #PEAK_MATCHER_LOGGER.info(f"CSP_dist: { dist.csp_distribution.alpha}, {dist.csp_distribution.scale }")
-        #csp_dist_converged, csp_dist_mean, csp_dist_max = verifyTensorConvergence(torch.cat([dist.csp_distribution.alpha, dist.csp_distribution.scale], dim=0),
-        #                                                                          torch.cat([previous_dist.csp_distribution.alpha, previous_dist.csp_distribution.scale], dim=0),
-        #                                                                          0.05,0.05)
+        #PEAK_MATCHER_LOGGER.info("CSP posterior convergence")
+        #csp_distribution_converged, csp_mean, csp_max = verifyTensorConvergence(dist.csp_posterior_probabilities.exp()[:,:,1]*matching_probs,
+        #                                                                        previous_dist.csp_posterior_probabilities.exp()[:,:,1]*matching_probs,
+        #                                                                        0.05,
+        #                                                                        0.05)
+        #PEAK_MATCHER_LOGGER.info("Matching posterior convergence")
+        #nonMatching_distribution_converged, nonMatching_mean, nonMatching_max = verifyTensorConvergence(
+        #    previous_matching_probs,
+        #    matching_probs,
+        #    0.05,
+        #    0.10)
+        PEAK_MATCHER_LOGGER.info("CSP distribution convergece")
+        PEAK_MATCHER_LOGGER.info(f"CSP_dist: { dist.csp_distribution.alpha}, {dist.csp_distribution.scale }")
+        csp_dist_converged, csp_dist_mean, csp_dist_max = verifyTensorConvergence(torch.cat([dist.csp_distribution.alpha, dist.csp_distribution.scale], dim=0),
+                                                                                 torch.cat([previous_dist.csp_distribution.alpha, previous_dist.csp_distribution.scale], dim=0),
+                                                                                  0.001,0.01)
 
 
-        if csp_distribution_converged and i >= minSteps and nonMatching_distribution_converged:
+        if i >= minSteps and csp_dist_converged:
             PEAK_MATCHER_LOGGER.info("Converged?: True")
             break
         else:
             PEAK_MATCHER_LOGGER.info("Converged?: False")
             if i == maxEMSteps - 1:
-                raise EMConvergenceFailureError()
+                warnings.warn(f"failed to achieve convergence after {maxEMSteps} EM steps, results may be unreliable", RuntimeWarning)
             #
         #
     #
@@ -360,7 +363,7 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
     #build priors
     no_csp_std = expected_fraction_csp  # Std deviation is arbitrarily set to being the same as the expected fraction csp
 
-    csp_mixture_priors = calculateBetaParametersFromMeanAndVariance(mean=1.0-expected_fraction_csp,
+    csp_mixture_priors = calculateBetaParametersFromMeanAndVariance(mean=expected_fraction_csp,
                                                                     variance=variance_scale_fraction_csp * no_csp_std ** 2)  # [no csp, csp ] (Given a match!)
 
 
