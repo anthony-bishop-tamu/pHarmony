@@ -53,9 +53,10 @@ def initalizeAllComponents(distances, dims):
                                    1.0-matching_probabilities),dim=2)
     initial_weights = (initial_weights - initial_weights.logsumexp(dim=2,keepdim=True)).exp() #enforce normalization for intial weights
 
-    csp_distribution=Frechet(torch.tensor([2.0],requires_grad=True),torch.tensor([30.0],requires_grad=True))
+    csp_distribution=Frechet(torch.tensor([2.0],requires_grad=True),torch.tensor([30.0],requires_grad=True),
+                             1.0,0.0)
 
-    non_matching_distribution = UniformDistanceSquared(omega=torch.tensor([1.0]))
+    non_matching_distribution = UniformDistanceSquared(log_prob=torch.tensor([1.0]))
 
 
 
@@ -146,7 +147,7 @@ def maximization(samples: tuple,
     PEAK_MATCHER_LOGGER = logging.getLogger(__name__)
     # optimizer = torch.optim.Adam([csp_assignment_params, csp_distribution_params], lr=1E-3)
     csp_distribution = dist.csp_distribution
-    optimizer = torch.optim.LBFGS(csp_distribution._params, lr=0.1,line_search_fn='strong_wolfe',history_size=100,max_iter=200,tolerance_change=0)
+    optimizer = torch.optim.LBFGS(csp_distribution._params, lr=1,line_search_fn='strong_wolfe',history_size=100,max_iter=200,tolerance_change=1E-9)
     maxIterators = 1000
     prevLoss = torch.finfo(torch.float64).max
     previous_alpha = csp_distribution.alpha.detach().clone()
@@ -202,18 +203,16 @@ def maximization(samples: tuple,
                 break
             continue
 
-        elif ((torch.abs(prev_alpha - csp_distribution.alpha).item() < 1e-5) and
-                (torch.abs(prev_scale - csp_distribution.scale).item() < 1e-5) and
-                (csp_distribution._alpha_logit.grad.norm() < 1E-5) and
-                (csp_distribution._scale_logit.grad.norm() < 1E-5)
+        elif ((torch.abs(prev_alpha - csp_distribution.alpha).item() < 1e-3) and
+                (torch.abs(prev_scale - csp_distribution.scale).item() < 1e-3)
         ):
             return dist
-        elif ((torch.abs(prev_alpha - csp_distribution.alpha).item() < 1e-5) and
-              (torch.abs(prev_scale - csp_distribution.scale).item() < 1e-5)):
+        #elif ((torch.abs(prev_alpha - csp_distribution.alpha).item() < 1e-5) and
+        #      (torch.abs(prev_scale - csp_distribution.scale).item() < 1e-5)):
 
-            PEAK_MATCHER_LOGGER.verbose("Line search switched off")
-            optimizer = torch.optim.LBFGS(csp_distribution._params, lr=optimizer.param_groups[0]['lr'], history_size=100, max_iter=200,tolerance_change=0)
-            line_search_off = True
+        #    PEAK_MATCHER_LOGGER.verbose("Line search switched off")
+        #    optimizer = torch.optim.LBFGS(csp_distribution._params, lr=optimizer.param_groups[0]['lr'], history_size=100, max_iter=200,tolerance_change=optimizer.param_groups[0]['tolerance_change'])
+        #    line_search_off = True
         prevLoss = loss.item()
 
 
@@ -287,17 +286,17 @@ def runEM(distances_squared_normalized: torch.tensor,
         sampleSize = len(samples)
 
         matching_probs = calculatePositionProb(samples, distances_squared_normalized.shape).detach()
-        #PEAK_MATCHER_LOGGER.info("CSP posterior convergence")
-        #csp_distribution_converged, csp_mean, csp_max = verifyTensorConvergence(dist.csp_posterior_probabilities.exp()[:,:,1]*matching_probs,
-        #                                                                        previous_dist.csp_posterior_probabilities.exp()[:,:,1]*matching_probs,
-        #                                                                        0.05,
-        #                                                                        0.05)
-        #PEAK_MATCHER_LOGGER.info("Matching posterior convergence")
-        #nonMatching_distribution_converged, nonMatching_mean, nonMatching_max = verifyTensorConvergence(
-        #    previous_matching_probs,
-        #    matching_probs,
-        #    0.05,
-        #    0.10)
+        PEAK_MATCHER_LOGGER.info("CSP posterior convergence")
+        csp_distribution_converged, csp_mean, csp_max = verifyTensorConvergence(dist.csp_posterior_probabilities.exp()[:,:,1]*matching_probs,
+                                                                                previous_dist.csp_posterior_probabilities.exp()[:,:,1]*matching_probs,
+                                                                                0.05,
+                                                                                0.05)
+        PEAK_MATCHER_LOGGER.info("Matching posterior convergence")
+        nonMatching_distribution_converged, nonMatching_mean, nonMatching_max = verifyTensorConvergence(
+            previous_matching_probs,
+            matching_probs,
+            0.05,
+            0.10)
         PEAK_MATCHER_LOGGER.info("CSP distribution convergece")
         PEAK_MATCHER_LOGGER.info(f"CSP_dist: { dist.csp_distribution.alpha}, {dist.csp_distribution.scale }")
         csp_dist_converged, csp_dist_mean, csp_dist_max = verifyTensorConvergence(torch.cat([dist.csp_distribution.alpha, dist.csp_distribution.scale], dim=0),
@@ -305,13 +304,13 @@ def runEM(distances_squared_normalized: torch.tensor,
                                                                                   0.001,0.01)
 
 
-        if i >= minSteps and csp_dist_converged:
+        if i >= minSteps and (csp_dist_converged or (csp_distribution_converged and nonMatching_distribution_converged)):
             PEAK_MATCHER_LOGGER.info("Converged?: True")
             break
         else:
             PEAK_MATCHER_LOGGER.info("Converged?: False")
             if i == maxEMSteps - 1:
-                warnings.warn(f"failed to achieve convergence after {maxEMSteps} EM steps, results may be unreliable", RuntimeWarning)
+                warnings.warn(f"failed to achieve convergence after {maxEMSteps} EM steps, this is unlikely a significant issue, convergence near optimum can be slow", RuntimeWarning)
             #
         #
     #
