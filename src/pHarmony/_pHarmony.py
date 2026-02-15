@@ -286,17 +286,17 @@ def runEM(distances_squared_normalized: torch.tensor,
         sampleSize = len(samples)
 
         matching_probs = calculatePositionProb(samples, distances_squared_normalized.shape).detach()
-        #PEAK_MATCHER_LOGGER.info("CSP posterior convergence")
-        #csp_distribution_converged, csp_mean, csp_max = verifyTensorConvergence(dist.csp_posterior_probabilities.exp()[:,:,1]*matching_probs,
-        #                                                                        previous_dist.csp_posterior_probabilities.exp()[:,:,1]*matching_probs,
-        #                                                                        0.05,
-        #                                                                        0.05)
-        #PEAK_MATCHER_LOGGER.info("Matching posterior convergence")
-        #nonMatching_distribution_converged, nonMatching_mean, nonMatching_max = verifyTensorConvergence(
-        #    previous_matching_probs,
-        #    matching_probs,
-        #    0.05,
-        #    0.10)
+        PEAK_MATCHER_LOGGER.info("CSP posterior convergence")
+        csp_distribution_converged, csp_mean, csp_max = verifyTensorConvergence(dist.csp_posterior_probabilities.exp()[:,:,1]*matching_probs,
+                                                                                previous_dist.csp_posterior_probabilities.exp()[:,:,1]*matching_probs,
+                                                                                0.05,
+                                                                                0.05)
+        PEAK_MATCHER_LOGGER.info("Matching posterior convergence")
+        nonMatching_distribution_converged, nonMatching_mean, nonMatching_max = verifyTensorConvergence(
+            previous_matching_probs,
+            matching_probs,
+            0.05,
+            0.10)
         PEAK_MATCHER_LOGGER.info("CSP distribution convergece")
         PEAK_MATCHER_LOGGER.info(f"CSP_dist: { dist.csp_distribution.alpha}, {dist.csp_distribution.scale }")
         csp_dist_converged, csp_dist_mean, csp_dist_max = verifyTensorConvergence(torch.cat([dist.csp_distribution.alpha, dist.csp_distribution.scale], dim=0),
@@ -304,7 +304,7 @@ def runEM(distances_squared_normalized: torch.tensor,
                                                                                   0.001,0.01)
 
 
-        if i >= minSteps and csp_dist_converged:
+        if i >= minSteps and (csp_dist_converged or (csp_distribution_converged and nonMatching_distribution_converged)):
             PEAK_MATCHER_LOGGER.info("Converged?: True")
             break
         else:
