@@ -2,14 +2,18 @@ import numpy as np
 import torch
 from pHarmony.MMSampler import MMSampler
 from pHarmony.Frechet import Frechet, UniformDistanceSquared
-import logging
 from tqdm import tqdm
 import math
-from pHarmony._log import configure_logging
+from pHarmony._log import get_logger
 import warnings
 class SampleSizeToLargeError(Exception):
     pass
 #
+
+def _log_scalar(value):
+    if torch.is_tensor(value):
+        return value.detach().item()
+    return value
 
 def calculateBetaParametersFromMeanAndVariance(mean, variance):
     assert 0 < mean and mean < 1
@@ -31,7 +35,7 @@ def initialize_csp_distribution(initial_CSP_distances: torch.tensor):
     opt = torch.optim.LBFGS(params, lr=1E-1, line_search_fn='strong_wolfe',history_size=10,max_iter=100)
     csp_distribution = Frechet(alpha_logit, scale_logit,1.0, 0.0)
     n_iterations = 1000
-    PEAK_MATCHER_LOGGER = logging.getLogger(__name__)
+    PEAK_MATCHER_LOGGER = get_logger(__name__)
     return csp_distribution
 
 def initalizeAllComponents(distances, dims):
@@ -85,10 +89,15 @@ def verifyTensorConvergence(torchPreviousParameter: torch.tensor,
                                torchNewParameter: torch.tensor,
                                averageDeviation: torch.tensor,
                                maxDeviation: torch.tensor):
-    PEAK_MATCHER_LOGGER = logging.getLogger(__name__)
+    PEAK_MATCHER_LOGGER = get_logger(__name__)
     difference = torchNewParameter - torchPreviousParameter
     converged = difference.abs().mean() < averageDeviation and difference.abs().max() < maxDeviation
-    PEAK_MATCHER_LOGGER.info("CONVERGENCE?=%s MaxDeviation=%.3e Limit=%.3e", converged, difference.abs().max(), maxDeviation)
+    PEAK_MATCHER_LOGGER.info(
+        "CONVERGENCE?=%s MaxDeviation=%.3e Limit=%.3e",
+        _log_scalar(converged),
+        _log_scalar(difference.abs().max()),
+        _log_scalar(maxDeviation),
+    )
     return converged.item(), difference.abs().mean(), difference.abs().max()
 #
 def calculatePositionProb(sample, shape):
@@ -144,7 +153,7 @@ def maximization(samples: tuple,
                  csp_mixture_priors: torch.tensor,
                  max_predicted_dm: float):
 
-    PEAK_MATCHER_LOGGER = logging.getLogger(__name__)
+    PEAK_MATCHER_LOGGER = get_logger(__name__)
     # optimizer = torch.optim.Adam([csp_assignment_params, csp_distribution_params], lr=1E-3)
     csp_distribution = dist.csp_distribution
     optimizer = torch.optim.LBFGS(csp_distribution._params, lr=1,line_search_fn='strong_wolfe',history_size=100,max_iter=200,tolerance_change=1E-9)
@@ -185,8 +194,8 @@ def maximization(samples: tuple,
             continue
         PEAK_MATCHER_LOGGER.verbose(
             "Step=%6d Loss=%12.3e, csp_alpha=%12.3e, csp_scale=%12.3e csp_alpha_grad=%12.3e csp_scale_grad=%12.3e",
-            itr, loss, csp_distribution.alpha.item(), csp_distribution.scale.item(),
-            csp_distribution._alpha_logit.grad.item(), csp_distribution._scale_logit.grad.item())
+            itr, _log_scalar(loss), _log_scalar(csp_distribution.alpha), _log_scalar(csp_distribution.scale),
+            _log_scalar(csp_distribution._alpha_logit.grad), _log_scalar(csp_distribution._scale_logit.grad))
         if ~csp_distribution.alpha.isfinite().all() or ~csp_distribution.scale.isfinite().all() or (loss-prevLoss > 1E-3):
             with torch.no_grad():
                 csp_distribution._alpha_logit.copy_(prev_params[0])
@@ -255,7 +264,7 @@ def runEM(distances_squared_normalized: torch.tensor,
               initial_non_matching_distribution: torch.distributions.Distribution,
               display_distributions: bool = False):
 
-    PEAK_MATCHER_LOGGER = logging.getLogger(__name__)
+    PEAK_MATCHER_LOGGER = get_logger(__name__)
     minSteps = 0
     maxEMSteps = 20
     csp_mixture_weights = initial_csp_mixture_weights
@@ -298,7 +307,11 @@ def runEM(distances_squared_normalized: torch.tensor,
             0.05,
             0.10)
         PEAK_MATCHER_LOGGER.info("CSP distribution convergece")
-        PEAK_MATCHER_LOGGER.info(f"CSP_dist: { dist.csp_distribution.alpha}, {dist.csp_distribution.scale }")
+        PEAK_MATCHER_LOGGER.info(
+            "CSP_dist: %s, %s",
+            dist.csp_distribution.alpha.detach(),
+            dist.csp_distribution.scale.detach(),
+        )
         csp_dist_converged, csp_dist_mean, csp_dist_max = verifyTensorConvergence(torch.cat([dist.csp_distribution.alpha, dist.csp_distribution.scale], dim=0),
                                                                                  torch.cat([previous_dist.csp_distribution.alpha, previous_dist.csp_distribution.scale], dim=0),
                                                                                   0.001,0.01)
@@ -340,7 +353,7 @@ def calculateReferencePeakDistances(reference_peak_positions: torch.Tensor, csp_
     distances_squared = torch.square(distances_squared).sum(dim=-1)
     return torch.sqrt(distances_squared)
 def determineSampleSize(startingSample: int, dist: MMSampler):
-    PEAK_MATCHER_LOGGER = logging.getLogger(__name__)
+    PEAK_MATCHER_LOGGER = get_logger(__name__)
     if isinstance(startingSample,int):
         startingSample = dist.sample(startingSample)
     #
@@ -370,8 +383,7 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
                variance_scale_fraction_csp,
                max_predicted_dnm):
 
-    configure_logging(__name__,level="VERBOSE")
-    PEAK_MATCHER_LOGGER = logging.getLogger(__name__)
+    PEAK_MATCHER_LOGGER = get_logger(__name__)
     #intialization
 
 
@@ -411,8 +423,6 @@ def MatchPeaks(reference_peak_positions: torch.Tensor,
 
     return dist, matching_probs.detach(), distances_squared_normalized
 #
-
-
 
 
 

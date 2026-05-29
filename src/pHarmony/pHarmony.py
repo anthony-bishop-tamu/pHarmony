@@ -1,4 +1,3 @@
-import logging, logging.config
 from pathlib import Path
 import argparse
 import time
@@ -8,7 +7,7 @@ from pHarmony._pHarmony import MatchPeaks
 from pHarmony.OutputHandling import outputResults, buildPlot
 import numpy as np
 from pHarmony import __version__
-from pHarmony._log import configure_logging
+from pHarmony._log import configure_logging, get_logger
 
 class ArgumentError(Exception):
     pass
@@ -79,11 +78,11 @@ def getPeakPositionsFromFile(filename, cs_cols, uncertaintycols=None, fixedError
 def run(args: argparse.Namespace):
     if args.log_file:
         log_output = args.output_directory / "log.txt"
-        configure_logging(__name__,log_file=log_output,level='VERBOSE',overwrite=True)
+        configure_logging(log_file=log_output, level="VERBOSE", overwrite=True)
     else:
-        configure_logging(__name__,level="VERBOSE")
+        configure_logging(level="VERBOSE")
 
-    logger = logging.getLogger(__name__)
+    logger = get_logger(__name__)
 
     start_time = time.time()
     logger.info(f"Version: {__version__}")
@@ -163,4 +162,3 @@ def run(args: argparse.Namespace):
 def main(argv=None) -> int:
     args = parseArguments().parse_args(argv)
     return run(args)
-

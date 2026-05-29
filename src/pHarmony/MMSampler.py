@@ -1,5 +1,3 @@
-import logging
-
 import scipy.spatial.distance
 import sklearn.cluster
 import torch
@@ -10,6 +8,7 @@ import torch.nn.functional as F
 from sklearn.cluster import SpectralClustering, AgglomerativeClustering
 from scipy.cluster.hierarchy import linkage, dendrogram, optimal_leaf_ordering, leaves_list
 from pHarmony.Frechet import Frechet, UniformDistanceSquared
+from pHarmony._log import get_logger
 import math
 class SamplingError(Exception):
     pass
@@ -326,7 +325,7 @@ class MMSampler:
                   ESS_History: torch.tensor,
                   force_resample=False):
 
-        logger = logging.getLogger(__name__)
+        logger = get_logger(__name__)
         normalized_weights = (sample_weights - sample_weights.logsumexp(dim=-1, keepdim=True)).exp()
         ess = 1.0/torch.pow(normalized_weights,2).sum()
         nsamples = np.prod(sample.shape[0:-1])
@@ -410,7 +409,7 @@ class MMSampler:
                         max_beam_width: int,
                         max_depth: int, ):
 
-        logger = logging.getLogger(__name__)
+        logger = get_logger(__name__)
         candidate_indicies = all_candidate_indicies[ordered_rows[current_row]]
         n_cols = availableCols.shape[1]
         k = candidate_indicies.shape[0]
@@ -558,7 +557,7 @@ class MMSampler:
                         max_beam_width = 1000
                     break
                 except LowESSError as e:
-                    logger = logging.getLogger(__name__)
+                    logger = get_logger(__name__)
 
                     current_decision_counter = decision_counter
                     while max_depths[decision_counter] > 0 or decision_counter == current_decision_counter :

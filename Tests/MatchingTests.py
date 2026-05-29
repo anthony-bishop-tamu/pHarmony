@@ -1,9 +1,15 @@
-import sys, subprocess, shlex, textwrap
-import importlib_resources
+import sys
+from pathlib import Path
+
+project_root = Path(__file__).resolve().parents[1]
+src_directory = project_root / "src"
+if str(src_directory) not in sys.path:
+    sys.path.insert(0, str(src_directory))
+
 from pHarmony.pHarmony import main as pm_main
 
 
-data_directory =  importlib_resources.files('Tests.TestData')
+data_directory = Path(__file__).resolve().parent / "TestData"
 
 #case1
 
@@ -22,7 +28,7 @@ arguments = [ "--reference_peak_list", str(reference_list),
               "--expected_max_csp", "0.1",
               "--gradient_convergence", "1E-5",
               "--confidence_cutoff", "0.9",
-              "--CSP_scaling_factor", "0.101", "1",
+              "--CSP_scaling_factors", "0.101", "1",
               "--log_file"]
 
 #pm_main(arguments)
@@ -43,7 +49,7 @@ arguments = [ "--reference_peak_list", str(reference_list),
               "--expected_max_csp", "0.1",
               "--gradient_convergence", "1E-5",
               "--confidence_cutoff", "0.9",
-              "--CSP_scaling_factor", "0.101", "1",
+              "--CSP_scaling_factors", "0.101", "1",
               "--log_file"]
 
 #pm_main(arguments)
@@ -65,7 +71,7 @@ arguments = [ "--reference_peak_list", str(reference_list),
               "--expected_max_csp", "0.2",
               "--gradient_convergence", "1E-5",
               "--confidence_cutoff", "0.9",
-              "--CSP_scaling_factor", "0.101", "1",
+              "--CSP_scaling_factors", "0.101", "1",
               "--log_file"]
 
 #pm_main(arguments)
@@ -87,7 +93,7 @@ arguments = [ "--reference_peak_list", str(reference_list),
               "--expected_max_csp", "0.2",
               "--gradient_convergence", "1E-5",
               "--confidence_cutoff", "0.9",
-              "--CSP_scaling_factor", "0.101", "1",
+              "--CSP_scaling_factors", "0.101", "1",
               "--log_file"]
 
 #pm_main(arguments)
@@ -108,7 +114,7 @@ arguments = [ "--reference_peak_list", str(reference_list),
               "--variance_scale_fraction_csp", "1",
               "--expected_max_csp", "0.2",
               "--confidence_cutoff", "0.9",
-              "--CSP_scaling_factor", '0.252',"0.101", "1",
+              "--CSP_scaling_factors", '0.252',"0.101", "1",
               "--log_file"]
 
 #pm_main(arguments)
@@ -129,7 +135,7 @@ arguments = [ "--reference_peak_list", str(reference_list),
               "--variance_scale_fraction_csp", "3",
               "--expected_max_csp", "0.1",
               "--confidence_cutoff", "0.9",
-              "--CSP_scaling_factor", "0.101", "1",
+              "--CSP_scaling_factors", "0.101", "1",
               "--log_file"]
 
 pm_main(arguments)

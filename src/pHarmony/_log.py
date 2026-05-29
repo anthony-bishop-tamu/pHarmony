@@ -1,5 +1,8 @@
 import logging
+import logging.config
 from pathlib import Path
+
+PACKAGE_LOGGER_NAME = "pHarmony"
 VERBOSE_LEVEL = 15
 logging.VERBOSE = VERBOSE_LEVEL                 # optional convenience
 logging.addLevelName(VERBOSE_LEVEL, "VERBOSE")
@@ -10,6 +13,18 @@ def verbose(self, msg, *args, **kwargs):
 
 # add the method to all Logger instances
 logging.Logger.verbose = verbose
+
+
+def get_logger(name=None):
+    if name is None:
+        name = PACKAGE_LOGGER_NAME
+    return logging.getLogger(name)
+
+
+def add_null_handler(name=None):
+    get_logger(name).addHandler(logging.NullHandler())
+
+
 def normalize_level(level):
     if isinstance(level, int):
         return level
@@ -19,7 +34,19 @@ def normalize_level(level):
         return num
     return int(level)           # allow numeric strings
 
-def configure_logging(pkg_name, *, log_file=None, level="INFO",
+
+def reset_child_loggers(pkg_name):
+    prefix = f"{pkg_name}."
+    logger_dict = logging.root.manager.loggerDict
+    for name, logger in logger_dict.items():
+        if not name.startswith(prefix) or not isinstance(logger, logging.Logger):
+            continue
+        logger.handlers.clear()
+        logger.setLevel(logging.NOTSET)
+        logger.propagate = True
+
+
+def configure_logging(pkg_name=PACKAGE_LOGGER_NAME, *, log_file=None, level="INFO",
                       console=True, overwrite=True, rotating=False):
     # Pre-create directory if logging to file
     handlers = {}
@@ -59,6 +86,7 @@ def configure_logging(pkg_name, *, log_file=None, level="INFO",
             }
         logger_handlers.append("file")
 
+    reset_child_loggers(pkg_name)
     logging.config.dictConfig({
         "version": 1,
         "disable_existing_loggers": False,
