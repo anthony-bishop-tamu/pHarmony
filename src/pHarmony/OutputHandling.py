@@ -96,7 +96,7 @@ def outputResults(matchingProbabilities: np.array,
                                 probabilityTable: Path,
                                 chemicalShiftProbabilityTable: Path,
                                 CSP_scaling_factors: list,
-                                confidenceCutoff: float = 0.90):
+                                confidenceCutoff: float = 0.95):
 
 
     row_peakList = referencePeakList
@@ -158,8 +158,13 @@ def outputResults(matchingProbabilities: np.array,
 
     hcpeaklist_df.rename(columns=lambda c: c.removesuffix("_target").removesuffix("_ref"), inplace=True)
 
-    hcpeaklist_df.to_csv(highConfidenceTransferedPeakList,index=False,sep='\t')
+    hcpeaklist_df.to_csv(highConfidenceTransferedPeakList.with_name(highConfidenceTransferedPeakList.stem+"_matching_only"+highConfidenceTransferedPeakList.suffix),index=False,sep='\t')
 
+    row_indexes = matchingProbabilities.argmax(axis=0)
+    row_probabilities = matchingProbabilities.max(axis=0)
+    transfer_mask = row_probabilities > confidenceCutoff
 
+    targetPeakList[0].loc[transfer_mask,'Assignment'] = referencePeakList[0].iloc[row_indexes[transfer_mask]]['Assignment'].to_numpy()
+    targetPeakList[0].to_csv(highConfidenceTransferedPeakList,index=False,sep='\t')
 #
 
