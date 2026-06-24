@@ -1,14 +1,14 @@
 # pHarmony
 
+pHarmony matches multidimensional NMR peak lists and estimates posterior match probabilities. It provides:
+
+- a `pHarmony` command-line tool for matching Sparky-style peak lists
+- a Python API centered on `pHarmony.MatchPeaks`
+
 ## Requirements
 
-- **Python**: `>= 3.9`
-
-### Python Dependencies
-
-The following packages are required:
-
-- `numpy>=1.24.0,<2 #Issue with dependencies on some platforms requiring 1`
+- Python `>=3.9`
+- `numpy>=1.24.0,<2`
 - `pandas>=2.0`
 - `torch>=2.0`
 - `matplotlib>=3.2`
@@ -16,148 +16,141 @@ The following packages are required:
 - `scikit-learn>=1.6.1`
 - `tqdm>=4.67.1`
 
----
+## Installation
 
-## Installation (Three Easy Steps)
-
-### 1) Create a Conda environment
+Create and activate an environment, then install the package.
 
 ```bash
 conda create --name pHarmony python=3.9
-```
-
-### 2) Activate the environment
-
-```bash
 conda activate pHarmony
+pip install git+https://github.com/anthony-bishop-tamu/pHarmony.git@main
 ```
 
-### 3) Install `pHarmony`
-
-Install via HTTPS 
+For development from a local checkout:
 
 ```bash
-pip install git+https://github.com/anthony-bishop-tamu/pHarmony.git@main  
-# pip install git+https://github.com/anthony-bishop-tamu/pHarmony.git@v1.4.0 is the version at the time of publishing
-# pip install git+https://github.com/anthony-bishop-tamu/pHarmony.git@main for the latest stable release
+pip install -e .
 ```
-
----
 
 ## Verify Installation
 
-To test that installation worked, run in your terminal:
+With the environment active, run:
 
 ```bash
-pHarmony
+pHarmony --help
 ```
-This command is the standalone peak matching algorithm
-You should see usage/help information printed to the terminal.
-Be sure the conda environment is active to run pHarmony
 
-## pHarmony Usage
-### Here is an example usage for pHarmony (2D matching example)
+You should see the command-line options for the standalone peak matching workflow.
+
+## Command-Line Usage
+
+Example 2D matching run:
+
 ```bash
-pHarmony    --reference_peak_list reference.list \ 
-            --reference_cs_column_names w2 w3 \
-            --reference_peak_list_error 0.015 0.0015 \
-            --target_peak_list target.list \
-            --target_cs_column_names w2 w3 \
-            --target_peak_list_error 0.015 0.0015 \
-            --output_directory output_directory
-            
-            
-### --reference_peak_list : A sparky formatted peak list
-### --reference_cs_column_names : The column names in the reference peak list that contain the dimensions to be matched
-### --reference_peak_list_error : The uncertainty in the reference peak positions (dimensions corresponding to column names)
-### --target_peak_list : A sparky formatted peak list
-### --target_cs_column_names : The column names in the reference peak list that contain the dimensions to be matched 
-### each dimension specified here will be matched to the corresponding dimension in the reference_cs_column_names
-### --target_peak_list_error 0.03 0.003 : uncertainty in the target peak position
-### --output_directory : The directory to contain the output files
-### --CSP_scaling_factors: factors by which to scale the chemical shift dimensions when calculating CSPs in the output files (e.g. 0.101 1.0 for 15N-1H HSQC)
-
-### OPTIONAL ARGUMENTS
-### --confidence_cutoff : Default 0.95 - confidence cutoff used gor generating final peak lists
-### --expected_fraction_csp : default 0.1 - Prior estimate of the fraction of matched peaks that undergo a CSP (Keep under 0.5)
-### --variance_scale_fraction_csp: default 2 - Scaling factor to create Beta prior variance: variance = variance_scale_fraction_csp*expected_fraction_csp**2
-### --expected_max_csp: Expected maximum chemical shift: default 0.1 ppm (good for proton-detected experiments) (in ppm of the dimension with the lowest uncertainty)
-###  if this is set too large, sampling might become extremely slow
-### --log_file: flag for including log file
-### --gradient_convergence : Threshold of parameter gradient norms to determine convergence during optimization
-
+pHarmony \
+  --reference_peak_list reference.list \
+  --reference_cs_column_names w1 w2 \
+  --reference_peak_list_error 0.015 0.0015 \
+  --target_peak_list target.list \
+  --target_cs_column_names w1 w2 \
+  --target_peak_list_error 0.015 0.0015 \
+  --CSP_scaling_factors 0.101 1.0 \
+  --output_directory peak_matcher_output
 ```
 
-### Output File Description
-Each run generates the following output files
+The reference and target peak lists are read as whitespace-delimited tables. Output transfer files expect an `Assignment` column, and the chemical shift columns are selected with `--reference_cs_column_names` and `--target_cs_column_names`.
 
-- #### CSP_probabilities.csv - a table that describes the posterior probability that the distance between two peaks is due to a chemical shift (given that its between matching peaks)
+### Required Arguments
 
-- #### Match_probabilities.csv - a table that describes the posterior probability that any two peak matches (as calculated from the final converged sample in the EM loop)
+- `--reference_peak_list`: reference peak list filename
+- `--reference_cs_column_names`: chemical shift column names in the reference list
+- `--reference_peak_list_error`: uncertainty for each reference dimension
+- `--target_peak_list`: target peak list filename
+- `--target_cs_column_names`: chemical shift column names in the target list
+- `--target_peak_list_error`: uncertainty for each target dimension
+- `--CSP_scaling_factors`: scaling factors for CSP calculation, one per matched dimension
 
-    - Note rows and columns may not sum to 1.0 (reference and target peaks might have sampled no match states)
+The number and order of reference dimensions, target dimensions, errors, and CSP scaling factors must match.
 
-- #### *_fittedDistributions.png - a plot showing the fit of the matching likelihoods and the distribution of the normalized square distances
-- #### *_transferred.csv - a list that indicates the highest probability match for each reference peak, the probability that the reference peak is missing and other statistics
-- #### *_transferred_HC.csv - same as *_transferred.csv, but filtered, rejecting any matches below the specified confidence cutoff
-- #### *_transferred.list - the inputted target_list which only contains peaks that were matched above the specified confidence cutoff to the reference spectrum peaks are labelled with the labels of their corresponding reference peak
-- #### log.txt - Optional log file that catches terminal output
+### Optional Arguments
 
+- `--output_directory`: directory for output files; default `./peak_matcher_output`
+- `--confidence_cutoff`: minimum posterior matching probability for high-confidence outputs; default `0.95`
+- `--expected_fraction_csp`: prior estimate for the fraction of matched peaks with a chemical shift perturbation; default `0.1`
+- `--variance_scale_fraction_csp`: scale factor used to set the Beta prior variance for CSP mixture weights; default `3.0`
+- `--expected_max_csp`: expected maximum CSP in ppm, in units of the lowest-uncertainty/scaled dimension; default `0.1`
+- `--log_file`: write terminal logging to `log.txt` in the output directory
 
+## Output Files
 
+Each run writes these files to the output directory:
 
-## Integration into Your Own Python Scripts
+- `Match_probabilities.csv`: posterior matching probability matrix for reference-target peak pairs
+- `CSP_probabilities.csv`: posterior probability that a matched pair has a chemical shift perturbation
+- `<reference>_<target>_fittedDistributions.png`: fitted matching, non-matching, and CSP distance distributions
+- `<reference>_<target>_transferred.csv`: best target match for each reference peak, including match probability, missing probability, normalized squared distance, and CSP
+- `<reference>_<target>_transferred_HC.csv`: high-confidence rows from the transferred table using `--confidence_cutoff`
+- `<reference>_<target>_transferred.list`: target peak list with high-confidence assignments transferred from the reference list
+- `<reference>_<target>_transferred_matching_only.list`: high-confidence matched peak list containing transferred assignments and target coordinates only
+- `log.txt`: optional log file when `--log_file` is supplied
 
-In your script you can import a function that performs a peak matching operation with
+Rows and columns in `Match_probabilities.csv` may not sum to `1.0` because reference and target peaks can be sampled as unmatched.
+
+## Python API
+
+Import the matcher:
 
 ```python
 from pHarmony import MatchPeaks
 ```
 
-### This function takes the following arguments
+Call signature:
 
-#### reference_peak_positions: torch.Tensor 
-- this should be of shape (number of reference peaks, number of dims, 2)
-- data placed in slice [:,:,0] are the chemical shifts for the corresponding peak and dimension
-
-- data placed in slice [:,:,1] are the uncertainty in chemical shift for the corresponding peak and dimension
-
-#### target_peak_positions: torch.Tensor 
-- this should be of shape (number of target peaks, number of dims, 2) 
-- data placed in slice [:,:,0] are the chemical shifts for the corresponding peak and dimension 
-- data placed in slice [:,:,1] are the uncertainty in chemical shift for the corresponding peak and dimension
-
-#### expected_fraction_csp: float 
-- this value should be in the range (0,1) and is the prior belief of what fraction of matched peak pairs were perturbed by a CSP. (0.1 is a reasonable value, values near 0.5 or more could cause problems)
-
-variance_scale_fraction_csp: float - this value should be positive and reflects how strongly the fraction csp prior
-influences the final result (2.0 is a reasonable value, larger values decrease the prior's influence, larger values increase it)
-
-#### max_predicted_dnm: float 
-- this value is the point at which the matching and non-matching likelihood functions should be set as equal 
-- It is generally calculated by taking a reasonable maximum expected chemical shit (say 0.1 ppm in proton) 
-dividing by the average or smallest chemical shift uncertainty (in proton say 0.0015-0.003) and squaring the result
-
-#### gradient_convergence: float 
-- this is the value that determines whether parameters converged during the maximization 
-gradient norms must be below this number (1E-6 is a reasonable value)
-
-### Returns - tuple: (sampler: MMSampler, matching_probabilities: torch.tensor, normalized_distance_squared_matrix: torch.tensor)
-
-#### sampler: MMSampler
-- This is an MMSampler (custom matching matrix sampler) object, parameterized with the EM optimized distributions
-- You can draw your own sample which is a a torch tensor of type int of shape (number of samples, number of reference peaks) 
-- each entry corresponds to the index of the matched target column (-1 indicates no match)
-- sample by calling
 ```python
-my_sample = sampler.sample(number_of_samples) #where number_of_samples is an int
+sampler, matching_probabilities, distances_squared_normalized = MatchPeaks(
+    reference_peak_positions,
+    target_peak_positions,
+    expected_fraction_csp,
+    variance_scale_fraction_csp,
+    max_predicted_dnm,
+)
 ```
 
+### Inputs
 
-#### matching_probabilities: torch.tensor
-- This is a tensor of type float of shape (number_of_reference_peaks, number_of_target_peaks)
-- Each entry is the frequency of the corresponding match occuring in the final sample
+`reference_peak_positions` and `target_peak_positions` are `torch.Tensor` objects with shape:
 
-#### normalized_distance_squared_matrix: torch.tensor
-- This is a tensor of type float of shape (number_of_reference_peaks, number_of_target_peaks) 
-that contains the normalized distances squared between all reference-target peak pairs
+```text
+(number_of_peaks, number_of_dimensions, 2)
+```
+
+For each peak and dimension:
+
+- `[..., 0]` is the chemical shift
+- `[..., 1]` is the chemical shift uncertainty
+
+Other parameters:
+
+- `expected_fraction_csp`: prior estimate in the range `(0, 1)` for the fraction of matched peak pairs with a CSP
+- `variance_scale_fraction_csp`: positive scale factor for the CSP mixture-weight prior variance
+- `max_predicted_dnm`: normalized squared distance where matching and non-matching likelihoods are set to be comparable
+
+You can calculate `max_predicted_dnm` from an expected CSP with:
+
+```python
+from pHarmony import calculateMaxD2FromCSP
+```
+
+### Returns
+
+- `sampler`: an `MMSampler` parameterized with the optimized posterior distributions
+- `matching_probabilities`: tensor of shape `(number_of_reference_peaks, number_of_target_peaks)`
+- `distances_squared_normalized`: tensor of normalized squared distances for every reference-target pair
+
+Draw assignment samples from the sampler with:
+
+```python
+sample = sampler.sample(number_of_samples)
+```
+
+The returned sample has shape `(number_of_samples, number_of_reference_peaks)`. Each value is the matched target peak index, and `-1` indicates no match.
