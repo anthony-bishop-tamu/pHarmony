@@ -99,8 +99,8 @@ arguments = [ "--reference_peak_list", str(reference_list),
 #pm_main(arguments)
 
 #case5
-reference_list = data_directory/'case6'/'km_IL1B_PeakMatcherBenchmark_HNCO_1003_filtered.list'
-target_list = data_directory/'case6'/'km_IL1B_PeakMatcherBenchmark_HNCO_1073_filtered.list'
+reference_list = data_directory/'case6'/'km_IL1B_PeakMatcherBenchmark_HNCO_1033_filtered.list'
+target_list = data_directory/'case6'/'km_IL1B_PeakMatcherBenchmark_HNCO_1083_filtered.list'
 output_directory = data_directory/'case6'/"test_output"
 
 arguments = [ "--reference_peak_list", str(reference_list),
@@ -117,7 +117,7 @@ arguments = [ "--reference_peak_list", str(reference_list),
               "--CSP_scaling_factors", '0.252',"0.101", "1",
               "--log_file"]
 
-#pm_main(arguments)
+pm_main(arguments)
 
 #case5
 reference_list = data_directory/'case7'/'fitted_not_referenced_471.list'
@@ -138,4 +138,4 @@ arguments = [ "--reference_peak_list", str(reference_list),
               "--CSP_scaling_factors", "0.101", "1",
               "--log_file"]
 
-pm_main(arguments)
+#pm_main(arguments)

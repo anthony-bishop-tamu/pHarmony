@@ -116,9 +116,15 @@ class MMSampler:
                   dim=-1)[0].item()  # + self._matching_mixture_weights
         self._non_matching_distribution = UniformDistanceSquared(log_prob=non_matching_log_prob)
 
-        self._loglikelihoodMatrix = torch.stack((self._no_csp_distribution.log_prob(self._distances).clamp(min=self.min_float64),
+        no_csp_likelihoods = self._no_csp_distribution.log_prob(self._distances).clamp(min=self.min_float64)
+        no_csp_likelihoods[
+            self._distances < (self._no_csp_distribution.df - 2) ] = self._no_csp_distribution.log_prob(
+            self._no_csp_distribution.mode).item()
+
+        self._loglikelihoodMatrix = torch.stack((no_csp_likelihoods,
                                                 self._csp_distribution.log_prob(self._distances).clamp(min=self.min_float64),
                                                 self._non_matching_distribution.log_prob(self._distances).clamp(min=self.min_float64)),dim=2)
+
         self._event_shape = (self._distances.shape[0],)
         if self._loglikelihoodMatrix[:,:,1].isnan().any():
             print(f"Error with CSP dist evaluation: parameters are alpha,scale {self.csp_distribution.alpha} {self.csp_distribution.scale}")
